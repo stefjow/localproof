@@ -53,9 +53,6 @@ void drawQRCode(const char *text);
 void displaySettingUpMessage();
 void displayErrorMessage(const char *text);
 
-unsigned long setupStartTime = millis();
-const unsigned long timeoutDuration = 10 * 60 * 1000; // 10 minutes
-
 // ATECC608 secure element (I2C 0x60). When present and locked, slot 0
 // signs and the private key never exists outside the chip. Without it,
 // signing falls back to the software key in secrets.h.
@@ -187,57 +184,27 @@ void setup() {
   // Check the reset reason
   esp_reset_reason_t resetReason = esp_reset_reason();
 
-  // Only set the RTC time from GPS on power-up or software reset
+  // On power-up or software reset, restart GPS acquisition. It runs
+  // non-blocking: the QR cycle starts immediately on RTC time, and each
+  // wake checks for a fix (checkGps in loop) until one lands — a cold
+  // start behind window glass can take far longer than any reasonable
+  // blocking timeout. Only a dead RTC (coin cell removed) blocks, since
+  // there is no time source to sign with at all.
   if (resetReason == ESP_RST_POWERON || resetReason == ESP_RST_SW) {
-    displaySettingUpMessage();
+    preferences.putBool("synced", false);
 
-    // Wait for GPS to get a fix or timeout
-    bool gpsFixAcquired = false;
-    bool gpsLocationValid = false;
-    while (millis() - setupStartTime < timeoutDuration) {
-      // Check for GPS data
-      while (gpsSerial.available() > 0) {
-        gps.encode(gpsSerial.read());
-      }
-
-      // Check if GPS has a valid fix (time and date)
-      if (gps.time.isValid() && gps.date.isValid()) {
-        gpsFixAcquired = true;
-
-        // Check if GPS has valid location data
-        if (gps.location.isValid()) {
-          gpsLocationValid = true;
-          break; // Exit the loop if GPS fix and location are acquired
+    bool rtcTrusted = !rtc.lostPower() && rtc.now().unixtime() > 1700000000UL;
+    if (!rtcTrusted) {
+      Serial.println("RTC has no valid time, blocking until GPS fix...");
+      displaySettingUpMessage();
+      while (!gps.time.isValid() || !gps.date.isValid() || gps.date.year() < 2025) {
+        while (gpsSerial.available() > 0) {
+          gps.encode(gpsSerial.read());
         }
       }
-    }
-
-    // Check if the GPS fix and location were acquired
-    if (gpsFixAcquired && gpsLocationValid) {
-      // Set the RTC time from the GPS (GPS time is UTC, which is what the
-      // signed timestamps must use)
       rtc.adjust(DateTime(gps.date.year(), gps.date.month(), gps.date.day(),
                  gps.time.hour(), gps.time.minute(), gps.time.second()));
       Serial.println("RTC time set from GPS");
-
-      // Save the location to NVS
-      preferences.putFloat("lat", gps.location.lat());
-      preferences.putFloat("lng", gps.location.lng());
-      Serial.print(gps.location.lat(), 6);
-      Serial.print(F(","));
-      Serial.println(gps.location.lng(), 6);
-
-      // Turn off the GPS module to save power
-      //digitalWrite(GPS_POWER_PIN, LOW);
-      Serial.println("GPS module turned off.");
-    } else {
-      // Timeout or invalid location occurred
-      if (!gpsFixAcquired) {
-        displayErrorMessage("GPS signal not found.");
-      } else {
-        displayErrorMessage("GPS location invalid.");
-      }
-      Serial.println("GPS signal or location not found within timeout.");
     }
   }
 
@@ -245,7 +212,49 @@ void setup() {
   display.hibernate();
 }
 
+// Listen to the GPS for a short window each wake until time and location
+// have been acquired once this power cycle. NMEA repeats every second,
+// so 2s catches complete sentences; bytes lost during deep sleep don't
+// matter. Returns once synced (GPS could then be powered off via the
+// 2N2222 on GPS_POWER_PIN).
+void checkGps() {
+  if (preferences.getBool("synced", false)) return;
+
+  unsigned long start = millis();
+  while (millis() - start < 2000) {
+    while (gpsSerial.available() > 0) {
+      gps.encode(gpsSerial.read());
+    }
+  }
+
+  // Fresh time fix: correct the RTC (GPS time is UTC). isValid() only
+  // means a field was parsed — before a real fix the module reports a
+  // dummy date (GPS epoch), so require a plausible year as well.
+  if (gps.time.isValid() && gps.date.isValid() && gps.date.year() >= 2025 && gps.time.age() < 1500) {
+    rtc.adjust(DateTime(gps.date.year(), gps.date.month(), gps.date.day(),
+               gps.time.hour(), gps.time.minute(), gps.time.second()));
+    Serial.println("RTC time set from GPS");
+  }
+
+  // Fresh location fix: store it and stop listening
+  if (gps.location.isValid() && gps.location.age() < 1500) {
+    preferences.putFloat("lat", gps.location.lat());
+    preferences.putFloat("lng", gps.location.lng());
+    preferences.putBool("synced", true);
+    Serial.print("GPS location acquired: ");
+    Serial.print(gps.location.lat(), 6);
+    Serial.print(F(","));
+    Serial.println(gps.location.lng(), 6);
+
+    // Turn off the GPS module to save power
+    //digitalWrite(GPS_POWER_PIN, LOW);
+  }
+}
+
 void loop() {
+  // Keep hunting for a GPS fix until one has landed this power cycle
+  checkGps();
+
   // Get the current time from the RTC
   DateTime currentTime = rtc.now();
 
