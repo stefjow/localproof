@@ -32,10 +32,10 @@ def client(tmp_path, monkeypatch):
     website_dir = os.path.join(REPO_ROOT, 'website')
     with open(os.path.join(website_dir, 'create_database.py')) as f:
         exec(f.read(), {'__name__': 'create_database'})
-    appmod.add_device(DEVICE_ID, 'unused-v1-secret', DEV_LAT, DEV_LNG,
+    appmod.add_device(DEVICE_ID, lat=DEV_LAT, lng=DEV_LNG,
                       max_validations=2, username='tester',
                       pubkey=DEVICE_KEY.public_key().export_key(format='PEM'))
-    appmod.add_device('NOKEY', 'some-secret', DEV_LAT, DEV_LNG,
+    appmod.add_device('NOKEY', lat=DEV_LAT, lng=DEV_LNG,
                       max_validations=1, username='tester')
     appmod.app.config['TESTING'] = True
     return appmod.app.test_client()

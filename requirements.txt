@@ -13,7 +13,6 @@ MarkupSafe==3.0.2
 pillow==11.1.0
 pycparser==2.22
 pycryptodome==3.22.0
-pyotp==2.8.0
 pytest==8.3.5
 pypng==0.20220715.0
 python-dotenv==1.0.0

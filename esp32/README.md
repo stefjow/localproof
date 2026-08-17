@@ -10,7 +10,6 @@ This directory contains the code for ESP32 devices and Python-based simulators t
 - **`hw_probe/`**: Diagnostic sketch — I2C wake-scan, ATECC status and public-key readout, RTC sync over serial (`SETTIME <epoch>`), and test signing (`SIGN <sha256 hex>`).
 - **`secrets.h.example`**: Template for the device identity (`secrets.h` is gitignored).
 - **`python_generator_v2.py`**: Simulates the device — key generation, signed QR codes, and ATECC public-key conversion (`pem` command).
-- **`python_generator.py`**: Legacy v1 simulator (AES-encrypted TOTP codes).
 
 ---
 

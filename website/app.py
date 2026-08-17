@@ -1,9 +1,6 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import sqlite3
-import pyotp
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
 from Crypto.PublicKey import ECC
 from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
@@ -49,15 +46,6 @@ def get_db_connection():
     conn = sqlite3.connect('database.db')
     conn.row_factory = sqlite3.Row
     return conn
-
-def decrypt_totp(key, cipher_text):
-    key = key.encode('utf-8').ljust(32, b'\0')[:32]
-    iv_and_ciphertext = base64.urlsafe_b64decode(cipher_text)
-    iv = iv_and_ciphertext[:16]
-    ciphertext = iv_and_ciphertext[16:]
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    plain_text = unpad(cipher.decrypt(ciphertext), AES.block_size)
-    return plain_text.decode('utf-8')
 
 def parse_public_key_pem(pem):
     """Validate a device public key: must be a P-256 public key.
@@ -213,45 +201,15 @@ def show_map():
     conn.close()
     return render_template('map.html', devices=devices, username=username)
 
-@app.route('/<device_id>/<data_enc>', methods=['GET'])
-def validate_totp(device_id, data_enc):
-    """
-    Step 1 of the challenge flow: opening the QR URL does NOT validate yet.
-    The server issues a one-time nonce and renders the map in a pending
-    state. The browser must answer via POST /validate/complete within
-    NONCE_TTL_SECONDS, sending the nonce and (if permitted) its geolocation.
-    """
-    conn = get_db_connection()
-    devices = conn.execute('''
-        SELECT *
-        FROM devices
-        WHERE active = TRUE
-        OR device_id = ?
-    ''', (device_id,)).fetchall()
-    device = conn.execute('SELECT * FROM devices WHERE device_id = ?', (device_id,)).fetchone()
-
-    if not device:
-        conn.close()
-        log_validation(device_id, "failed", "Invalid Device ID")
-        return render_template('map.html', devices=devices, status="Invalid Device ID", success="false")
-
-    nonce = secrets.token_urlsafe(16)
-    conn.execute(
-        'INSERT INTO pending_validations (nonce, device_id, data_enc, created_at) VALUES (?, ?, ?, ?)',
-        (nonce, device_id, data_enc, datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
-    )
-    conn.commit()
-    conn.close()
-
-    return render_template('map.html', devices=devices, nonce=nonce)
-
 @app.route('/v2/<device_id>/<payload_b64>/<sig_b64>', methods=['GET'])
 def validate_signed(device_id, payload_b64, sig_b64):
     """
-    Step 1 of the v2 (signature) scheme. The QR carries a plaintext payload
+    Step 1 of the challenge flow. The QR carries a plaintext payload
     "ts|lat|lng" and an ECDSA P-256 signature over "device_id|ts|lat|lng".
-    Like v1, opening the URL only issues a nonce challenge; verification
-    happens in /validate/complete.
+    Opening the URL does NOT validate yet: the server issues a one-time
+    nonce and renders the map in a pending state. The browser must answer
+    via POST /validate/complete within NONCE_TTL_SECONDS, sending the
+    nonce and (if permitted) its geolocation.
     """
     conn = get_db_connection()
     devices = conn.execute('''
@@ -269,7 +227,7 @@ def validate_signed(device_id, payload_b64, sig_b64):
 
     nonce = secrets.token_urlsafe(16)
     conn.execute(
-        "INSERT INTO pending_validations (nonce, device_id, data_enc, created_at, scheme) VALUES (?, ?, ?, ?, 'v2')",
+        "INSERT INTO pending_validations (nonce, device_id, data_enc, created_at) VALUES (?, ?, ?, ?)",
         (nonce, device_id, payload_b64 + '.' + sig_b64,
          datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
     )
@@ -279,7 +237,7 @@ def validate_signed(device_id, payload_b64, sig_b64):
     return render_template('map.html', devices=devices, nonce=nonce)
 
 def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
-    """Step 2 of the v2 scheme: verify signature, freshness and location."""
+    """Step 2 of the challenge flow: verify signature, freshness and location."""
     device_id = pending['device_id']
 
     try:
@@ -353,7 +311,7 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
 def complete_validation():
     """
     Step 2 of the challenge flow: consume the nonce and run the actual
-    validation (decrypt, TOTP, max_validations, scanner location check).
+    validation (signature, freshness, max_validations, scanner location).
     """
     data = request.get_json(silent=True) or {}
     nonce = data.get('nonce')
@@ -391,76 +349,7 @@ def complete_validation():
         log_validation(device_id, "failed", "Invalid Device ID")
         return jsonify({'success': False, 'status': 'Invalid Device ID'})
 
-    if pending['scheme'] == 'v2':
-        return complete_validation_v2(pending, device, scanner_lat, scanner_lng)
-
-    try:
-        decrypted_data = decrypt_totp(device['secret'], pending['data_enc'])
-    except Exception:
-        log_validation(device_id, "failed", "Decryption Error", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
-        return jsonify({'success': False, 'status': 'Invalid Data Encryption'})
-
-    try:
-        totp_number, esp_lat, esp_lng = decrypted_data.split('|')
-        esp_lat = float(esp_lat)
-        esp_lng = float(esp_lng)
-    except (ValueError, IndexError):
-        log_validation(device_id, "failed", "Invalid Data Format", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
-        return jsonify({'success': False, 'status': 'Invalid Decrypted Data Format'})
-
-    # Get the current TOTP cycle start time
-    totp = pyotp.TOTP(device['secret'])
-    current_time = datetime.datetime.now()
-    time_step = totp.interval
-    cycle_start = current_time.timestamp() - (current_time.timestamp() % time_step)
-    cycle_start_str = datetime.datetime.utcfromtimestamp(cycle_start).strftime('%Y-%m-%d %H:%M:%S')
-
-    # valid_window=1 tolerates the challenge round trip crossing a cycle boundary
-    if not totp.verify(totp_number, valid_window=1):
-        log_validation(device_id, "failed", "Invalid TOTP", esp_lat, esp_lng, scanner_lat, scanner_lng)
-        return jsonify({'success': False, 'status': 'Invalid Link'})
-
-    # Cross-check the scanner's browser geolocation against the registered
-    # device location. No geolocation (denied/unavailable) downgrades the
-    # validation instead of failing it; a clear mismatch fails.
-    location_verified = False
-    if scanner_lat is not None and scanner_lng is not None \
-            and device['lat'] is not None and device['lng'] is not None:
-        distance_m = haversine_m(float(scanner_lat), float(scanner_lng), device['lat'], device['lng'])
-        if distance_m > MAX_SCANNER_DISTANCE_M:
-            log_validation(device_id, "failed", f"Location Mismatch ({int(distance_m)}m away)",
-                           esp_lat, esp_lng, scanner_lat, scanner_lng)
-            return jsonify({'success': False, 'status': 'Location Mismatch'})
-        location_verified = True
-
-    conn = get_db_connection()
-    validations_in_cycle = conn.execute(
-        'SELECT COUNT(*) FROM validation_logs WHERE device_id = ? AND timestamp >= ? AND status = "success"',
-        (device_id, cycle_start_str)
-    ).fetchone()[0]
-
-    if validations_in_cycle >= device['max_validations']:
-        conn.close()
-        log_validation(device_id, "failed", "Max Validations Exceeded", esp_lat, esp_lng, scanner_lat, scanner_lng)
-        return jsonify({'success': False, 'status': 'Max Validations Exceeded'})
-
-    reason = "Valid TOTP" if location_verified else "Valid TOTP (location unverified)"
-    log_validation(device_id, "success", reason, esp_lat, esp_lng, scanner_lat, scanner_lng)
-
-    conn.execute('UPDATE devices SET active = TRUE WHERE device_id = ?', (device_id,))
-    conn.commit()
-    conn.close()
-
-    return jsonify({
-        'success': True,
-        'status': 'Valid Link' if location_verified else 'Valid Link (location unverified)',
-        'device_id': device_id,
-        'esp_lat': esp_lat,
-        'esp_lng': esp_lng,
-        'device_lat': device['lat'],
-        'device_lng': device['lng'],
-        'location_verified': location_verified
-    })
+    return complete_validation_v2(pending, device, scanner_lat, scanner_lng)
 
 @app.route('/add-device', methods=['POST'])
 @login_required  # Ensure the user is logged in
@@ -506,24 +395,24 @@ def add_device_route():
     finally:
         conn.close()
 
-def add_device(device_id, secret, lat=None, lng=None, max_validations=1, username=None, pubkey=None):
+def add_device(device_id, secret='', lat=None, lng=None, max_validations=1, username=None, pubkey=None):
     """
     Adds a device to the database.
 
     :param device_id: Unique ID of the device.
-    :param secret: TOTP secret for the device (v1 scheme).
+    :param secret: Unused, accepted only for backward compatibility.
     :param lat: Latitude of the device's location (optional).
     :param lng: Longitude of the device's location (optional).
-    :param max_validations: Max validations per window.
+    :param max_validations: Max validations per signed code.
     :param username: Username of the user who added the device.
-    :param pubkey: ECDSA P-256 public key in PEM format (v2 scheme).
+    :param pubkey: ECDSA P-256 public key in PEM format.
     """
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO devices (device_id, secret, lat, lng, max_validations, username, pubkey)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (device_id, secret, lat, lng, max_validations, username, pubkey))
+        INSERT INTO devices (device_id, lat, lng, max_validations, username, pubkey)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (device_id, lat, lng, max_validations, username, pubkey))
     conn.commit()
     conn.close()
     print(f"Device '{device_id}' added successfully by user '{username}'.")

@@ -40,7 +40,6 @@ localproof/
 │   ├── secrets.h.example        # Device identity template (secrets.h is gitignored)
 │   ├── hw_probe/                # Diagnostic sketch: I2C scan, ATECC status, RTC sync
 │   ├── python_generator_v2.py   # Device simulator: keygen, signed QRs, key conversion
-│   ├── python_generator.py      # Legacy v1 simulator (AES+TOTP)
 │   ├── static/                  # Generated QR images
 │   └── README.md                # Provisioning and firmware documentation
 ├── website/                     # Flask backend and frontend
@@ -51,7 +50,7 @@ localproof/
 │   ├── static/                  # CSS, JS, images
 │   ├── templates/               # HTML templates
 │   └── README.md                # Website-specific documentation
-├── tests/                       # End-to-end pytest suite (v1 and v2 flows)
+├── tests/                       # End-to-end pytest suite
 ├── .github/workflows/ci.yml     # CI: full test suite on push/PR
 ├── pictures/                    # Photos for the README and HARDWARE.md
 ├── HARDWARE.md                  # Hardware build description
@@ -105,7 +104,7 @@ gunicorn -w 2 -b 127.0.0.1:5005 app:app
 
 ### Running the tests
 
-End-to-end tests for the validation flow (QR scan → nonce challenge → TOTP,
+End-to-end tests for the validation flow (QR scan → nonce challenge → signature,
 location and max-validation checks) live in `tests/`. From the repo root:
 
 ```bash

@@ -7,7 +7,7 @@ cursor = conn.cursor()
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS devices (
     device_id TEXT PRIMARY KEY,
-    secret TEXT NOT NULL,
+    pubkey TEXT,
     lat REAL,
     lng REAL,
     max_validations INTEGER,
@@ -50,26 +50,33 @@ CREATE TABLE IF NOT EXISTS pending_validations (
     device_id TEXT NOT NULL,
     data_enc TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    used INTEGER DEFAULT 0,
-    scheme TEXT DEFAULT 'v1'
+    used INTEGER DEFAULT 0
 )
 ''')
 
 # Migrations (no-ops on fresh databases):
 # - scanner location and signed-code timestamp columns on validation_logs
-# - ECDSA public key (PEM) on devices for the v2 signature scheme
-# - scheme marker on pending_validations
+# - ECDSA public key (PEM) on devices for the signature scheme
 for table, column in (
     ('validation_logs', 'scanner_lat REAL'),
     ('validation_logs', 'scanner_lng REAL'),
     ('validation_logs', 'code_ts INTEGER'),
     ('devices', 'pubkey TEXT'),
-    ('pending_validations', "scheme TEXT DEFAULT 'v1'"),
 ):
     try:
         cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column}')
     except sqlite3.OperationalError:
         pass  # column already exists
+
+# v1 (AES+TOTP) teardown: drop its leftover columns from older databases
+for table, column in (
+    ('devices', 'secret'),
+    ('pending_validations', 'scheme'),
+):
+    try:
+        cursor.execute(f'ALTER TABLE {table} DROP COLUMN {column}')
+    except sqlite3.OperationalError:
+        pass  # column already gone
 
 # Commit changes and close the connection
 conn.commit()
