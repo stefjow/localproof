@@ -175,8 +175,7 @@
                             // //     html: `<div>${device.device_id}</div>`
                             // })
                         }).addTo(map);
-                        marker.bindPopup(`<div class="popup-content">Device ID: ${device.device_id}<br>Secret: ${device.secret}<br><hr><strong>Validate once to add it to the map.</strong></div>`)
-                        //marker.bindPopup(`Inactive Device: ${device.device_id}`);
+                        marker.bindPopup(`<div class="popup-content">Device ID: ${device.device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`)
                         inactiveDeviceMarkers.push(marker);
                     }
                 });
@@ -469,30 +468,62 @@
                         return;
                     }
 
-                    // Generate random device_id and secret
+                    // Generate random device_id
                     const device_id = generateRandomString(4);
-                    const secret = generateRandomString(16);
 
-                    // Create a popup with a form
+                    // Create a popup with a form. The device is identified by
+                    // its ECDSA P-256 public key; the private key stays on the
+                    // device (ATECC slot 0 or secrets.h) and is never uploaded.
                     const popup = L.popup()
                         .setLatLng(e.latlng)
                         .setContent(`
                         <div class="popup-headline">Register Device</div>
                             <div class="popup-content">
-                                Device ID: 
+                                Device ID:
                                 <input type="text" value="${device_id}" readonly>
-                                <br>Secret: <input type="text" value="${secret}" readonly>
-                                <br>Max. Validations: 
+                                <br>Max. Validations:
                                 <input type="number" id="max_validations" min="1" value="1" required>
-                                <br><button onclick="registerDevice(${e.latlng.lat}, ${e.latlng.lng}, '${device_id}', '${secret}', this)">Register Device</button>
+                                <br>Public key (PEM):
+                                <br><textarea id="reg-pubkey" rows="4" style="width: 100%;" placeholder="-----BEGIN PUBLIC KEY-----&#10;from hw_probe + 'python_generator_v2.py pem', or generate below"></textarea>
+                                <br><button onclick="generateBrowserKeypair()">Generate keypair in browser</button>
+                                <div id="reg-privkey-box" style="display: none;">
+                                    <strong>Private key — copy it now, it is not stored anywhere:</strong>
+                                    <br><textarea id="reg-privkey" rows="5" readonly style="width: 100%;" onclick="this.select()"></textarea>
+                                </div>
+                                <br><button onclick="registerDevice(${e.latlng.lat}, ${e.latlng.lng}, '${device_id}', this)">Register Device</button>
                             </div>
                         `)
                         .openOn(map);
                 });
         });
+
+        // PEM-encode a DER buffer from WebCrypto exportKey
+        function pemEncode(buffer, label) {
+            const b64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            return `-----BEGIN ${label}-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END ${label}-----`;
+        }
+
+        // Generate a P-256 keypair in the browser (for simulators / devices
+        // without a secure element). Only the public key is sent to the
+        // server; the private key is shown once for the user to keep.
+        async function generateBrowserKeypair() {
+            const keys = await crypto.subtle.generateKey(
+                { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+            const pub = await crypto.subtle.exportKey('spki', keys.publicKey);
+            const priv = await crypto.subtle.exportKey('pkcs8', keys.privateKey);
+            document.getElementById('reg-pubkey').value = pemEncode(pub, 'PUBLIC KEY');
+            document.getElementById('reg-privkey').value = pemEncode(priv, 'PRIVATE KEY');
+            document.getElementById('reg-privkey-box').style.display = 'block';
+        }
         // Function to register the device
-        function registerDevice(lat, lng, device_id, secret, button) {
+        function registerDevice(lat, lng, device_id, button) {
             let max_validations = document.getElementById('max_validations').value;
+            const pubkey = document.getElementById('reg-pubkey').value.trim();
+
+            if (!pubkey) {
+                alert('Paste the device public key or generate a keypair first.');
+                return;
+            }
 
             // Validate max_validations
             max_validations = parseInt(max_validations, 10);
@@ -512,7 +543,7 @@
                 },
                 body: JSON.stringify({
                     device_id: device_id,
-                    secret: secret,
+                    pubkey: pubkey,
                     lat: lat,
                     lng: lng,
                     max_validations: max_validations
@@ -527,7 +558,7 @@
                     map.closePopup();
                     marker = L.marker([lat, lng], { opacity: 0.5 })  // Set opacity to 0.5
                         .addTo(map)
-                        .bindPopup(`<div class="popup-content">Device ID: ${device_id}<br>Secret: ${secret}<br><hr><strong>Validate once to add it to the map.</strong></div>`)
+                        .bindPopup(`<div class="popup-content">Device ID: ${device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`)
                         .openPopup();
                     // Close the popup
                     registeredDeviceMarkers.push(marker)

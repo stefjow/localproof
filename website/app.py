@@ -59,6 +59,17 @@ def decrypt_totp(key, cipher_text):
     plain_text = unpad(cipher.decrypt(ciphertext), AES.block_size)
     return plain_text.decode('utf-8')
 
+def parse_public_key_pem(pem):
+    """Validate a device public key: must be a P-256 public key.
+    Returns the normalized PEM, or None if invalid."""
+    try:
+        key = ECC.import_key(pem)
+    except (ValueError, IndexError, TypeError):
+        return None
+    if key.has_private() or key.curve not in ('NIST P-256', 'p256'):
+        return None
+    return key.export_key(format='PEM')
+
 def verify_device_signature(pubkey_pem, message: bytes, signature: bytes) -> bool:
     """Verify an ECDSA P-256 signature (raw r||s, 64 bytes) over message."""
     try:
@@ -142,11 +153,12 @@ def logout():
 def get_my_inactive_devices():
     conn = get_db_connection()
     devices = conn.execute(
-        'SELECT * FROM devices WHERE active = FALSE AND username = ?',
+        '''SELECT device_id, lat, lng, max_validations, active
+           FROM devices WHERE active = FALSE AND username = ?''',
         (current_user.username,)
     ).fetchall()
     conn.close()
-    
+
     # Convert Row objects to dictionaries
     devices_list = [dict(device) for device in devices]
     return jsonify(devices_list)
@@ -458,13 +470,17 @@ def add_device_route():
 
     data = request.get_json()
     device_id = data.get('device_id')
-    secret = data.get('secret')
+    pubkey = data.get('pubkey')
     lat = data.get('lat')
     lng = data.get('lng')
     max_validations = data.get('max_validations')
 
-    if not device_id or not secret:
-        return jsonify({'success': False, 'message': 'Device ID and secret are required.'})
+    if not device_id or not pubkey:
+        return jsonify({'success': False, 'message': 'Device ID and public key are required.'})
+
+    pubkey = parse_public_key_pem(pubkey)
+    if not pubkey:
+        return jsonify({'success': False, 'message': 'Invalid public key (expecting a P-256 public key in PEM format).'})
 
     # Validate max_validations
     try:
@@ -483,7 +499,7 @@ def add_device_route():
         return jsonify({'success': False, 'message': 'Device ID already exists. Please try again.'})
 
     try:
-        add_device(device_id, secret, lat, lng, max_validations, current_user.username)
+        add_device(device_id, '', lat, lng, max_validations, current_user.username, pubkey)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
