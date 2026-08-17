@@ -2,7 +2,9 @@
 
 **Proof of Presence and Location Using ESP32 Devices**
 
-This project implements an proof-of-presence system using ESP32 microcontrollers. Each device generates a cryptographically signed QR code that rotates every 30 seconds.
+This project implements a proof-of-presence system using ESP32 microcontrollers. Each device signs `device_id|timestamp|lat|lng` with an ECDSA P-256 key — preferably inside an ATECC608 secure element, so the key cannot be extracted or cloned — and displays the result as a QR code that rotates every 30 seconds.
+
+Scanning the QR opens a validation URL. The server does not trust the URL alone: it issues a one-time nonce challenge that the scanner's browser must answer within seconds, along with its geolocation, which is cross-checked against the device's registered location. Replayed links, reused challenges and stale codes (45s freshness window) are rejected.
 
 Time synchronization is provided by GPS, enabling operation without internet connectivity. A simple stack (ESP32 hardware, a Flask backend, and a Leaflet.js frontend) is used to generate, verify, and visualize presence data.
 
@@ -16,40 +18,45 @@ The website is hosted at [localproof.org](https://localproof.org/).
 
 ## Features
 
-- **ESP32 Integration**: Devices generate encrypted QR codes with GPS coordinates and TOTP codes.
-- **Real-Time Map**: Interactive map showing device locations and validation attempts.
-- **Secure Validation**: AES-256 encryption and TOTP-based validation for tamper-proof data.
-- **Scalable Backend**: Flask-powered API with SQLite database for storing devices and logs.
+- **Hardware-anchored signatures**: ECDSA P-256 via an ATECC608 secure element (with a software-key fallback) — the server stores only public keys, so neither a server compromise nor a full flash dump can clone a device.
+- **Nonce challenge flow**: opening a QR URL does not validate; the browser must answer a fresh one-time challenge, killing cached/forwarded links.
+- **Scanner geolocation cross-check**: browser location is compared against the device's registered position (>500m fails; denied geolocation downgrades to "location unverified").
+- **Real-Time Map**: interactive map showing device locations and validation attempts.
+- **Flask backend**: SQLite database for devices and validation logs, end-to-end pytest suite, CI.
+
+### What a validation proves (and what it doesn't)
+
+A successful validation proves that *someone with a live browser, at a plausible location, answered a fresh challenge within seconds of the device displaying the code*. A live real-time relay by a cooperating person at the location (streaming the QR and spoofing geolocation) is not prevented — relay resistance beyond this would require a bidirectional proximity channel (NFC/UWB) rather than a display-only device.
 
 ---
 
 ## Repository Structure
 
-- **`esp32/`**: Code for ESP32 devices and Python-based simulators.
-- **`website/`**: Flask backend and frontend for the web app.
-- **`README.md`**: This file.
-- **`LICENSE`**: Project license.
-
-
 ```
 localproof/
-├── esp32/                     # ESP32 code and related files
-│   ├── esp32_code.ino         # Main ESP32 code
-│   ├── python_generator.py    # Python code to simulate ESP32 behavior
-│   ├── static/                # Folder to store generated QRs
-│   └── README.md              # ESP32-specific documentation
-├── website/                   # Flask website code
-│   ├── app.py                 # Flask application
-│   ├── create_database.py     # Python script to generate database (run once)
-│   ├── landing_page.html      # Landing page
-│   ├── static/                # Static files (CSS, JS, images)
-│   ├── templates/             # HTML templates
-│   └── README.md              # Website-specific documentation
-├── pictures/                  # Photos for BLOGPOST.md
-├── README.md                  # Main project README
-├── BLOGPOST.md                # Blog post
-├── requirements.txt           # Python dependencies
-└── LICENSE                    # Project license
+├── esp32/                       # ESP32 firmware, tools and simulators
+│   ├── esp32_code.ino           # Main firmware (ECDSA-signed QR codes)
+│   ├── qrcodegen.{h,c}          # Vendored QR generator (ricmoo/QRCode, MIT)
+│   ├── secrets.h.example        # Device identity template (secrets.h is gitignored)
+│   ├── hw_probe/                # Diagnostic sketch: I2C scan, ATECC status, RTC sync
+│   ├── python_generator_v2.py   # Device simulator: keygen, signed QRs, key conversion
+│   ├── python_generator.py      # Legacy v1 simulator (AES+TOTP)
+│   ├── static/                  # Generated QR images
+│   └── README.md                # Provisioning and firmware documentation
+├── website/                     # Flask backend and frontend
+│   ├── app.py                   # Flask application
+│   ├── create_database.py       # Schema creation + migrations (safe to re-run)
+│   ├── .env.example             # SECRET_KEY etc. (.env is gitignored)
+│   ├── landing_page.html        # Landing page
+│   ├── static/                  # CSS, JS, images
+│   ├── templates/               # HTML templates
+│   └── README.md                # Website-specific documentation
+├── tests/                       # End-to-end pytest suite (v1 and v2 flows)
+├── .github/workflows/ci.yml     # CI: full test suite on push/PR
+├── pictures/                    # Photos for the README and HARDWARE.md
+├── HARDWARE.md                  # Hardware build description
+├── requirements.txt             # Python dependencies
+└── LICENSE                      # Project license (MIT)
 ```
 
 ---
@@ -67,7 +74,7 @@ localproof/
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/localproof.git
+   git clone https://github.com/sweing/localproof.git
    cd localproof
    ```
 2. Setting up virtual environment & install requirements:

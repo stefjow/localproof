@@ -6,14 +6,30 @@ This directory contains the code for ESP32 devices and Python-based simulators t
 
 ## Files
 
-- **`esp32_code.ino`**: Main ESP32 code. Signs `device_id|ts|lat|lng` with an ECDSA P-256 key (mbedtls) and displays the resulting `/v2/...` URL as a QR code.
+- **`esp32_code.ino`**: Main ESP32 code. Signs `device_id|ts|lat|lng` with ECDSA P-256 — in the ATECC608 secure element when present (I2C 0x60, locked, key in slot 0), otherwise in software (mbedtls) — and displays the resulting `/v2/...` URL as a QR code.
+- **`hw_probe/`**: Diagnostic sketch — I2C wake-scan, ATECC status and public-key readout, RTC sync over serial (`SETTIME <epoch>`), and test signing (`SIGN <sha256 hex>`).
 - **`secrets.h.example`**: Template for the device identity (`secrets.h` is gitignored).
-- **`python_generator_v2.py`**: Simulates the device — key generation and signed QR codes.
+- **`python_generator_v2.py`**: Simulates the device — key generation, signed QR codes, and ATECC public-key conversion (`pem` command).
 - **`python_generator.py`**: Legacy v1 simulator (AES-encrypted TOTP codes).
 
 ---
 
 ## Provisioning a device
+
+### With an ATECC608 secure element (recommended)
+
+1. Flash `hw_probe/hw_probe.ino` and open the serial monitor (115200). It
+   prints the chip's lock status and its slot-0 public key as X||Y hex.
+2. Convert the public key to PEM and register it on the server:
+   ```bash
+   python python_generator_v2.py pem <xy-hex>
+   ```
+3. Create `secrets.h` with just the device id (the software key block can
+   be omitted): copy `secrets.h.example` and set `DEVICE_ID`.
+4. Flash `esp32_code.ino`. The firmware detects the chip automatically
+   (serial prints `Signer: ATECC608 slot 0`).
+
+### Without a secure element (software key)
 
 1. Generate a keypair (once per device):
    ```bash
