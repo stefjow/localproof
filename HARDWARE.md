@@ -1,51 +1,33 @@
-### The Hardware Setup
+# Hardware
 
-![Device Setup](pictures/device.jpeg?raw=true)
+![Device](pictures/device.jpeg)
 
-The first challenge was to ensure the device could keep accurate time without relying on an internet connection. I started with an ESP8266 microcontroller and its built-in Wi-Fi module, but I wanted the device to work completely offline. A friend lent me a GPS module, and I discovered that it could also receive accurate time data from GPS satellites.
+The device is designed to work fully offline: it derives time and location from GPS satellites and signs its own presence claims on-chip, so no network or trusted server is involved during operation.
 
-The hardware setup:
+## Components
 
-- **ESP32 Microcontroller**: Upgrade from the ESP8266 because I needed more GPIO pins.
-- **NEO-6M GPS Module**: To acquire location and time data.
-- **DS3231 Real-Time Clock (RTC) Module**: To maintain accurate time (I2C 0x68).
-- **ATECC608B Secure Element**: Holds the device's ECDSA P-256 signing key in slot 0 (I2C 0x60). The key is generated inside the chip and can never be read out, so the device cannot be cloned — not even with full access to the ESP32's flash.
-- **Waveshare 1.54" Black/White E-Paper Display**: I chose a black-and-white display over a color one because the refresh rate is much faster (2 seconds vs. 8 seconds).
-- **2N2222 NPN Bipolar Transistor**: To switch off the GPS module once it acquires the location and time.
-- **Breadboard and Cables**: For prototyping.
-- **5.1K Resistor**: For circuit stability.
+- **ESP32 microcontroller** — drives the display, GPS, RTC and secure element.
+- **NEO-6M GPS module** — location and UTC time from GPS satellites.
+- **DS3231 RTC** (I2C 0x68) — keeps time between the initial GPS fix and the next power cycle.
+- **ATECC608B secure element** (I2C 0x60) — holds the ECDSA P-256 private key in slot 0. The key is generated inside the chip and cannot be read out.
+- **Waveshare 1.54" black/white e-paper** — ~2 s refresh (colour equivalents are ~8 s), zero power to hold an image.
+- **2N2222 NPN transistor** — wired to switch the GPS module off from a GPIO pin. Not yet driven by firmware; scheduled with the battery module.
+- Breadboard, 5.1 kΩ pull-up, jumper wires.
 
----
+## Operation
 
-### Operation breakdown
+1. **Boot.** The device waits for a full GPS time and location fix before doing anything else. The display shows a "Searching for GPS" screen and the serial port prints satellite diagnostics (`chars`, `sats`, `hdop`, `inview`, `snr`) every 10 seconds. There is no timeout — a cold start can take a long time on a poor sky view. Once fixed, the RTC is set and the location is written to NVS; deep-sleep wakes within the same power cycle reuse the stored fix.
+2. **Signing.** Every 30 seconds the device builds `device_id|timestamp|lat|lng`, takes its SHA-256 digest, and signs the digest with ECDSA P-256 — inside the ATECC608 (~140 ms) if present, otherwise in software via mbedtls as a fallback.
+3. **QR.** Payload and signature are base64url-encoded into a URL of the form `https://localproof.libmap.org/v2/<id>/<payload>/<sig>` and rendered as a version-8 QR (49×49 modules). Nothing in the URL is secret; the value is that only this device could have signed it, and only within the last 45 seconds.
+4. **Sleep.** The ESP32 deep-sleeps until the next 30 s boundary. The DS3231 keeps time across sleep.
 
-1. **Boot-Up**: On power-up the device waits for a real GPS time and location fix before generating any QR codes — the display shows a "Searching for GPS" screen and the serial port prints satellite diagnostics every 10 seconds (a cold start can take a long time; there is deliberately no timeout). Once fixed, the RTC is set and the location stored in flash (NVS); deep-sleep wakes reuse the stored fix for the rest of the power cycle.
-2. **GPS Shutdown**: Once the GPS module has acquired its data, it's turned off using the 2N2222 transistor.
-3. **Signing**: Every 30 seconds, the device builds the message `device_id|timestamp|lat|lng` and signs its SHA-256 digest with ECDSA P-256 — inside the ATECC608 if present (~140ms), otherwise in software via mbedtls.
-4. **QR Code Creation**: The validation URL carries the plaintext payload and the signature (base64url): `https://map.localproof.org/v2/<id>/<payload>/<signature>`. Nothing in it is secret — its value is that only this device could have signed it, and only within the last 45 seconds.
-5. **Display**: The QR code (version 8, 49×49 modules) is rendered on the e-paper screen.
-6. **Deep Sleep**: The device deep-sleeps until the next half-minute mark to save power.
+![QR on display](pictures/screen.jpeg)
 
-![QR Code Display](pictures/screen.jpeg?raw=true)
+The server verifies the signature and freshness, then challenges the scanning browser to answer a fresh nonce together with its own geolocation. See the [main README](README.md#how-verification-works) for the full flow.
 
-I set up a Flask server to verify the QR codes. When a code is scanned, the server returns a JSON response confirming the validity.
+![Verification response](pictures/verification.jpeg)
 
-At this stage, the device is fully functional. It can generate and display QR codes, and the Flask server can verify them.
+## Open items
 
-![Verification JSON](pictures/verification.jpeg)
-
----
-
-### Next Steps
-
-1. ~~**Hardware Security Module (HSM)**~~: Done — an ATECC608B now holds the signing key; devices can no longer be duplicated.
-2. **Web Implementation**: More user-friendly web interface for device registration (public-key based) and verification.
-3. **Battery Module**: Adding a battery will make the device portable.
-4. **Casing Design**: Designing a 3D-printed casing.
-
-If you’re interested in following this project, feel free to reach out or leave a comment. I’ll be sharing updates of my progress!
-
-[Project on GitHub](https://github.com/sweing/localproof)
-
-
----
+- **Battery module.** Enable duty-cycled operation: sleep the ESP32 between QR refreshes and only power the GPS when a new fix is needed.
+- **Casing.** 3D-printed enclosure.

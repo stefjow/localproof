@@ -30,6 +30,15 @@ RTC_DS3231 rtc;
 // Create an instance of the TinyGPS++ object
 TinyGPSPlus gps;
 
+// Satellites *in view* and their signal strength from GPGSV, for the
+// searching diagnostics — gps.satellites (from GGA) counts only
+// satellites *used* in a fix, so it stays 0 until a solution exists
+// and cannot distinguish "sees nothing" from "sees too weakly".
+TinyGPSCustom gsvInView(gps, "GPGSV", 3);
+TinyGPSCustom gsvSnr1(gps, "GPGSV", 7);
+TinyGPSCustom gsvSnr2(gps, "GPGSV", 11);
+TinyGPSCustom gsvSnr3(gps, "GPGSV", 15);
+
 // Define the serial connection for the GPS module
 SoftwareSerial gpsSerial(16, 17); // TX, RX
 
@@ -211,7 +220,17 @@ void setup() {
         Serial.print(" sats=");
         Serial.print(gps.satellites.isValid() ? gps.satellites.value() : 0);
         Serial.print(" hdop=");
-        Serial.println(gps.hdop.isValid() ? gps.hdop.hdop() : 99.9);
+        Serial.print(gps.hdop.isValid() ? gps.hdop.hdop() : 99.9);
+        // Sky view: satellites in sight and the SNR (dB) of the last
+        // GSV sentence's three slots — empty SNR = tracked, no signal
+        Serial.print(" inview=");
+        Serial.print(gsvInView.isValid() ? gsvInView.value() : "?");
+        Serial.print(" snr=");
+        Serial.print(gsvSnr1.value());
+        Serial.print("/");
+        Serial.print(gsvSnr2.value());
+        Serial.print("/");
+        Serial.println(gsvSnr3.value());
         if (gps.charsProcessed() < 10) {
           Serial.println("WARNING: no NMEA data from GPS module - check wiring/power");
         }

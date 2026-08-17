@@ -1,132 +1,84 @@
 # localproof
 
-**Proof of Presence and Location Using ESP32 Devices**
+Proof of presence and location for ESP32 devices.
 
-This project implements a proof-of-presence system using ESP32 microcontrollers. Each device signs `device_id|timestamp|lat|lng` with an ECDSA P-256 key — preferably inside an ATECC608 secure element, so the key cannot be extracted or cloned — and displays the result as a QR code that rotates every 30 seconds.
+Each device signs `device_id|timestamp|lat|lng` with an ECDSA P-256 key that lives inside an ATECC608B secure element. The private key is generated on-chip and cannot be read out, so the server only stores the corresponding public key. The signed payload is displayed as a QR code that rotates every 30 seconds. Time and coordinates come from a GPS module, so the device runs without any network connection.
 
-Scanning the QR opens a validation URL. The server does not trust the URL alone: it issues a one-time nonce challenge that the scanner's browser must answer within seconds, along with its geolocation, which is cross-checked against the device's registered location. Replayed links, reused challenges and stale codes (45s freshness window) are rejected.
+The site is hosted at [localproof.libmap.org](https://localproof.libmap.org). Hardware notes: [HARDWARE.md](HARDWARE.md).
 
-Time synchronization is provided by GPS, enabling operation without internet connectivity. A simple stack (ESP32 hardware, a Flask backend, and a Leaflet.js frontend) is used to generate, verify, and visualize presence data.
-
-The website is hosted at [localproof.org](https://localproof.org/).
-
-[Hardware specifics](https://github.com/sweing/localproof/blob/main/HARDWARE.md)
-
-<img src="pictures/device.jpeg?raw=true" height="300"/> <img src="pictures/screen.jpeg?raw=true" height="300"/> <img src="pictures/verification.jpeg?raw=true" height="300"/> <img src="pictures/popup.jpeg?raw=true" height="300"/> 
+<img src="pictures/device.jpeg" height="260"/> <img src="pictures/screen.jpeg" height="260"/> <img src="pictures/verification.jpeg" height="260"/> <img src="pictures/popup.jpeg" height="260"/>
 
 ---
 
-## Features
+## How verification works
 
-- **Hardware-anchored signatures**: ECDSA P-256 via an ATECC608 secure element (with a software-key fallback) — the server stores only public keys, so neither a server compromise nor a full flash dump can clone a device.
-- **Nonce challenge flow**: opening a QR URL does not validate; the browser must answer a fresh one-time challenge, killing cached/forwarded links.
-- **Scanner geolocation cross-check**: browser location is compared against the device's registered position (>500m fails; denied geolocation downgrades to "location unverified").
-- **Real-Time Map**: interactive map showing device locations and validation attempts.
-- **Flask backend**: SQLite database for devices and validation logs, end-to-end pytest suite, CI.
+Scanning the QR opens a URL of the form `/v2/<device_id>/<payload>/<signature>` (both parts base64url). The server then:
 
-### What a validation proves (and what it doesn't)
+1. Verifies the ECDSA signature against the device's registered public key.
+2. Checks the payload timestamp against a 45-second freshness window.
+3. Issues a one-time nonce and renders a page that requests browser geolocation.
+4. Accepts the nonce back (within 15 seconds) together with the scanner's coordinates, and compares them to the device's registered position; more than 500 m apart is rejected, denied geolocation is recorded as *location unverified*.
 
-A successful validation proves that *someone with a live browser, at a plausible location, answered a fresh challenge within seconds of the device displaying the code*. A live real-time relay by a cooperating person at the location (streaming the QR and spoofing geolocation) is not prevented — relay resistance beyond this would require a bidirectional proximity channel (NFC/UWB) rather than a display-only device.
+### What a successful validation shows
+
+That a live browser, at a plausible location, answered a fresh challenge within seconds of the QR being displayed. It does not defend against a cooperating on-site relay (someone at the device streaming the QR and spoofing geolocation); ruling that out would require a proximity channel such as NFC or UWB, which a display-only device cannot provide.
+
+### Why these pieces
+
+- **On-chip key.** A device can be physically opened and its flash dumped without leaking the signing key, so cloning requires physical possession of a specific chip.
+- **Freshness window.** Bounds how long a captured QR remains useful without depending on any clock the attacker controls.
+- **Nonce + geolocation.** Separates "someone saw a URL" from "someone was there when it was displayed". The URL alone is not a proof.
+- **GPS time.** Removes the need for network time sync; the RTC is set once per power cycle from GPS.
 
 ---
 
-## Repository Structure
+## Stack
+
+- **Firmware:** Arduino/ESP32, NEO-6M GPS, DS3231 RTC, ATECC608B, 1.54" Waveshare e-paper.
+- **Backend:** Flask + SQLite, gunicorn in production. Devices, users and validation logs live in one database; only public keys are stored.
+- **Frontend:** MapLibre globe with per-device history and per-user validation lists.
+- **Tests:** pytest end-to-end suite covering the full scan → nonce → signature → location flow. CI on every push.
+
+## Repository layout
 
 ```
-localproof/
-├── esp32/                       # ESP32 firmware, tools and simulators
-│   ├── esp32_code.ino           # Main firmware (ECDSA-signed QR codes)
-│   ├── qrcodegen.{h,c}          # Vendored QR generator (ricmoo/QRCode, MIT)
-│   ├── secrets.h.example        # Device identity template (secrets.h is gitignored)
-│   ├── hw_probe/                # Diagnostic sketch: I2C scan, ATECC status, RTC sync
-│   ├── python_generator_v2.py   # Device simulator: keygen, signed QRs, key conversion
-│   ├── static/                  # Generated QR images
-│   └── README.md                # Provisioning and firmware documentation
-├── website/                     # Flask backend and frontend
-│   ├── app.py                   # Flask application
-│   ├── create_database.py       # Schema creation + migrations (safe to re-run)
-│   ├── .env.example             # SECRET_KEY etc. (.env is gitignored)
-│   ├── landing_page.html        # Landing page
-│   ├── static/                  # CSS, JS, images
-│   ├── templates/               # HTML templates
-│   └── README.md                # Website-specific documentation
-├── tests/                       # End-to-end pytest suite
-├── .github/workflows/ci.yml     # CI: full test suite on push/PR
-├── pictures/                    # Photos for the README and HARDWARE.md
-├── HARDWARE.md                  # Hardware build description
-├── requirements.txt             # Python dependencies
-└── LICENSE                      # Project license (MIT)
+esp32/            firmware, provisioning tools, device simulator
+website/          Flask app, schema, templates, static assets
+tests/            end-to-end validation tests
+pictures/         photos used in the docs
+HARDWARE.md       hardware build notes
+requirements.txt
 ```
 
----
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.8+
-- Flask
-- SQLite
-- ESP32 development environment (Arduino IDE or PlatformIO)
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/sweing/localproof.git
-   cd localproof
-   ```
-2. Setting up virtual environment & install requirements:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-3. Create database and run the Flask app:
-   ```bash
-   cd website
-   python create_database.py
-   python app.py
-   ```
-
-4. Access the website at `http://localhost:5005`.
-
-### Production deployment
-
-Set a fixed session key and run under gunicorn instead of the Flask dev server:
+## Getting started
 
 ```bash
+git clone https://github.com/stefjow/localproof.git
+cd localproof
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
 cd website
-cp .env.example .env   # then set SECRET_KEY (see comment in the file)
+python create_database.py
+python app.py         # http://localhost:5005
+```
+
+For production, set `SECRET_KEY` in `website/.env` and run under gunicorn:
+
+```bash
 gunicorn -w 2 -b 127.0.0.1:5005 app:app
 ```
 
-### Running the tests
-
-End-to-end tests for the validation flow (QR scan → nonce challenge → signature,
-location and max-validation checks) live in `tests/`. From the repo root:
+## Tests
 
 ```bash
 pytest
 ```
 
----
+## ESP32
 
-## ESP32 Code
-
-The ESP32 code and simulators are located in the `esp32/` directory. Refer to the [ESP32 README](esp32/README.md) for details on setting up and running the code.
+Provisioning and firmware details are in [esp32/README.md](esp32/README.md).
 
 ---
 
-## Contributing
-
-Contributions are welcome!
-
----
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
+MIT licensed. See [LICENSE](LICENSE).
