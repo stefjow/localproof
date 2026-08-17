@@ -7,11 +7,20 @@ from Crypto.Util.Padding import pad, unpad
 import base64
 import datetime
 import bcrypt
+import os
 import secrets
 from math import radians, sin, cos, asin, sqrt
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # Change this to a secure key
+app.secret_key = os.environ.get('SECRET_KEY')
+if not app.secret_key:
+    # Random fallback keeps the app safe to run without a .env, but sessions
+    # won't survive restarts and multi-worker deployments need a fixed key.
+    app.secret_key = secrets.token_hex(32)
+    print("WARNING: SECRET_KEY not set, using a random key. Set it in .env for production.")
 
 # Nonce challenge settings
 NONCE_TTL_SECONDS = 15       # how long the browser has to answer the challenge
@@ -408,4 +417,5 @@ def delete_device(device_id):
         conn.close()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5005, debug=True)
+    # Dev server only — use gunicorn in production (see README).
+    app.run(host='0.0.0.0', port=5005, debug=os.environ.get('FLASK_DEBUG') == '1')

@@ -5,13 +5,13 @@ click==8.1.8
 cryptography==41.0.3
 Flask==2.3.2
 Flask-Login==0.6.3
+gunicorn==23.0.0
 importlib_metadata==8.6.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.2
 pillow==11.1.0
 pycparser==2.22
-pycrypto==2.6.1
 pycryptodome==3.22.0
 pyotp==2.8.0
 pytest==8.3.5

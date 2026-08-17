@@ -86,6 +86,16 @@ localproof/
 
 4. Access the website at `http://localhost:5005`.
 
+### Production deployment
+
+Set a fixed session key and run under gunicorn instead of the Flask dev server:
+
+```bash
+cd website
+cp .env.example .env   # then set SECRET_KEY (see comment in the file)
+gunicorn -w 2 -b 127.0.0.1:5005 app:app
+```
+
 ### Running the tests
 
 End-to-end tests for the validation flow (QR scan → nonce challenge → TOTP,
