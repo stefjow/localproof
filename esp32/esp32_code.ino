@@ -19,7 +19,7 @@
 
 // SETUP
 //String baseUrl = "http://localhost:5005/"; // Dynamic base URL
-String baseUrl = "https://map.localproof.org/";
+String baseUrl = "https://localproof.libmap.org/";
 const char *deviceId = DEVICE_ID;
 
 Preferences preferences;
@@ -184,60 +184,42 @@ void setup() {
   // Check the reset reason
   esp_reset_reason_t resetReason = esp_reset_reason();
 
-  // On power-up or software reset, restart GPS acquisition. It runs
-  // non-blocking: the QR cycle starts immediately on RTC time, and each
-  // wake checks for a fix (checkGps in loop) until one lands — a cold
-  // start behind window glass can take far longer than any reasonable
-  // blocking timeout. Only a dead RTC (coin cell removed) blocks, since
-  // there is no time source to sign with at all.
+  // On power-up or software reset, block until the GPS delivers a real
+  // time AND location fix: no QR codes are generated before the device
+  // knows where and when it is. A cold start can take a long time, so
+  // there is deliberately no timeout. Deep-sleep wakes skip this — the
+  // fix is stored in NVS and reused for the rest of the power cycle.
   if (resetReason == ESP_RST_POWERON || resetReason == ESP_RST_SW) {
     preferences.putBool("synced", false);
 
-    bool rtcTrusted = !rtc.lostPower() && rtc.now().unixtime() > 1700000000UL;
-    if (!rtcTrusted) {
-      Serial.println("RTC has no valid time, blocking until GPS fix...");
-      displaySettingUpMessage();
-      while (!gps.time.isValid() || !gps.date.isValid() || gps.date.year() < 2025) {
-        while (gpsSerial.available() > 0) {
-          gps.encode(gpsSerial.read());
+    Serial.println("Waiting for GPS fix (no QR codes until then)...");
+    displaySettingUpMessage();
+
+    unsigned long lastReport = 0;
+    // isValid() only means a field was parsed — before a real fix the
+    // module reports a dummy date (GPS epoch), so require a plausible
+    // year and a fresh location.
+    while (!(gps.location.isValid() && gps.location.age() < 1500 &&
+             gps.time.isValid() && gps.date.isValid() && gps.date.year() >= 2025)) {
+      while (gpsSerial.available() > 0) {
+        gps.encode(gpsSerial.read());
+      }
+      if (millis() - lastReport >= 10000) {
+        lastReport = millis();
+        Serial.print("GPS: chars=");
+        Serial.print(gps.charsProcessed());
+        Serial.print(" sats=");
+        Serial.print(gps.satellites.isValid() ? gps.satellites.value() : 0);
+        Serial.print(" hdop=");
+        Serial.println(gps.hdop.isValid() ? gps.hdop.hdop() : 99.9);
+        if (gps.charsProcessed() < 10) {
+          Serial.println("WARNING: no NMEA data from GPS module - check wiring/power");
         }
       }
-      rtc.adjust(DateTime(gps.date.year(), gps.date.month(), gps.date.day(),
-                 gps.time.hour(), gps.time.minute(), gps.time.second()));
-      Serial.println("RTC time set from GPS");
     }
-  }
 
-  // Hibernate the display to save power
-  display.hibernate();
-}
-
-// Listen to the GPS for a short window each wake until time and location
-// have been acquired once this power cycle. NMEA repeats every second,
-// so 2s catches complete sentences; bytes lost during deep sleep don't
-// matter. Returns once synced (GPS could then be powered off via the
-// 2N2222 on GPS_POWER_PIN).
-void checkGps() {
-  if (preferences.getBool("synced", false)) return;
-
-  unsigned long start = millis();
-  while (millis() - start < 2000) {
-    while (gpsSerial.available() > 0) {
-      gps.encode(gpsSerial.read());
-    }
-  }
-
-  // Fresh time fix: correct the RTC (GPS time is UTC). isValid() only
-  // means a field was parsed — before a real fix the module reports a
-  // dummy date (GPS epoch), so require a plausible year as well.
-  if (gps.time.isValid() && gps.date.isValid() && gps.date.year() >= 2025 && gps.time.age() < 1500) {
     rtc.adjust(DateTime(gps.date.year(), gps.date.month(), gps.date.day(),
                gps.time.hour(), gps.time.minute(), gps.time.second()));
-    Serial.println("RTC time set from GPS");
-  }
-
-  // Fresh location fix: store it and stop listening
-  if (gps.location.isValid() && gps.location.age() < 1500) {
     preferences.putFloat("lat", gps.location.lat());
     preferences.putFloat("lng", gps.location.lng());
     preferences.putBool("synced", true);
@@ -245,16 +227,18 @@ void checkGps() {
     Serial.print(gps.location.lat(), 6);
     Serial.print(F(","));
     Serial.println(gps.location.lng(), 6);
+    Serial.println("RTC time set from GPS");
 
-    // Turn off the GPS module to save power
+    // GPS is no longer needed this power cycle (it could now be powered
+    // off via the 2N2222 on GPS_POWER_PIN).
     //digitalWrite(GPS_POWER_PIN, LOW);
   }
+
+  // Hibernate the display to save power
+  display.hibernate();
 }
 
 void loop() {
-  // Keep hunting for a GPS fix until one has landed this power cycle
-  checkGps();
-
   // Get the current time from the RTC
   DateTime currentTime = rtc.now();
 
@@ -362,15 +346,54 @@ void drawQRCode(const char *text)
   while (display.nextPage());
 }
 
+// Print text horizontally centered with its baseline/top at y
+void drawCenteredText(const char *text, int16_t y) {
+  int16_t bx, by;
+  uint16_t bw, bh;
+  display.getTextBounds(text, 0, y, &bx, &by, &bw, &bh);
+  display.setCursor((display.width() - bw) / 2 - bx, y);
+  display.print(text);
+}
+
+// 1px-wide circle drawn as alternating arcs (onDeg on, offDeg off)
+void drawDashedCircle(int16_t cx, int16_t cy, int16_t r, uint8_t onDeg, uint8_t offDeg) {
+  for (int deg = 0; deg < 360; deg++) {
+    if (deg % (onDeg + offDeg) < onDeg) {
+      float rad = deg * 0.0174533f;
+      display.drawPixel(cx + (int16_t)roundf(r * cosf(rad)),
+                        cy + (int16_t)roundf(r * sinf(rad)), GxEPD_BLACK);
+    }
+  }
+}
+
 void displaySettingUpMessage() {
   display.setFullWindow();
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
-    display.setCursor(10, 30);
+
+    // Radar motif: solid center fading into dashed outer rings
+    const int16_t cx = 100, cy = 80;
+    display.fillCircle(cx, cy, 4, GxEPD_BLACK);
+    display.drawCircle(cx, cy, 16, GxEPD_BLACK);
+    display.drawCircle(cx, cy, 17, GxEPD_BLACK);
+    drawDashedCircle(cx, cy, 31, 8, 7);
+    drawDashedCircle(cx, cy, 45, 5, 10);
+
+    // Crosshair ticks just outside the outer ring
+    display.drawFastHLine(cx - 58, cy, 10, GxEPD_BLACK);
+    display.drawFastHLine(cx + 49, cy, 10, GxEPD_BLACK);
+    display.drawFastVLine(cx, cy - 58, 10, GxEPD_BLACK);
+    display.drawFastVLine(cx, cy + 49, 10, GxEPD_BLACK);
+
     display.setTextColor(GxEPD_BLACK);
     display.setFont(&FreeSansBold9pt7b);
-    display.println("Searching for GPS signal...");
+    drawCenteredText("Searching for GPS", 168);
+
+    char sub[32];
+    snprintf(sub, sizeof(sub), "localproof  -  %s", deviceId);
+    display.setFont(NULL);  // built-in 6x8 font
+    drawCenteredText(sub, 184);
   } while (display.nextPage());
 }
 
