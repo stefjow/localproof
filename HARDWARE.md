@@ -19,7 +19,7 @@ The hardware setup:
 
 ### Operation breakdown
 
-1. **Boot-Up**: The device starts generating signed QR codes immediately using the RTC's battery-backed time, while GPS acquisition runs in the background: each 30s wake listens for ~2s until a fix lands (a cold start behind window glass can take a long time). Once fixed, the RTC is corrected and the location stored in flash (NVS) — subsequent QR codes carry the real coordinates. Only a dead RTC (no valid time source) blocks start-up until the first fix.
+1. **Boot-Up**: On power-up the device waits for a real GPS time and location fix before generating any QR codes — the display shows a "Searching for GPS" screen and the serial port prints satellite diagnostics every 10 seconds (a cold start can take a long time; there is deliberately no timeout). Once fixed, the RTC is set and the location stored in flash (NVS); deep-sleep wakes reuse the stored fix for the rest of the power cycle.
 2. **GPS Shutdown**: Once the GPS module has acquired its data, it's turned off using the 2N2222 transistor.
 3. **Signing**: Every 30 seconds, the device builds the message `device_id|timestamp|lat|lng` and signs its SHA-256 digest with ECDSA P-256 — inside the ATECC608 if present (~140ms), otherwise in software via mbedtls.
 4. **QR Code Creation**: The validation URL carries the plaintext payload and the signature (base64url): `https://map.localproof.org/v2/<id>/<payload>/<signature>`. Nothing in it is secret — its value is that only this device could have signed it, and only within the last 45 seconds.

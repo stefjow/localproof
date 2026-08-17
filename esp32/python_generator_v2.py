@@ -28,7 +28,7 @@ from Crypto.PublicKey import ECC
 from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
 
-# base_url = "https://map.localproof.org"
+# base_url = "https://localproof.libmap.org"
 base_url = "http://localhost:5005"
 
 device_id = "0001"
