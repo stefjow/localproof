@@ -1,0 +1,51 @@
+{% extends '_base.html' %}
+{% block title %}LOCALPROOF: My Validations{% endblock %}
+{% block content %}
+<section class="inner">
+  <h1>My Validations</h1>
+  <p class="hint">Every QR you've scanned while logged in, newest first.</p>
+  <div id="validations-empty" class="empty" style="display:none;">
+    You haven't validated any devices yet. Scan a device QR to start.
+  </div>
+  <table class="validations-table" id="validations-table" style="display:none;">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Device</th>
+        <th>Status</th>
+        <th>Reason</th>
+        <th>Scanner location</th>
+      </tr>
+    </thead>
+    <tbody id="validations-body"></tbody>
+  </table>
+</section>
+
+<script>
+async function loadValidations() {
+  const r = await fetch('/api/my-validations');
+  const rows = await r.json();
+  const tbl = document.getElementById('validations-table');
+  const tbody = document.getElementById('validations-body');
+  const empty = document.getElementById('validations-empty');
+  tbody.innerHTML = '';
+  if (!rows.length) { tbl.style.display = 'none'; empty.style.display = 'block'; return; }
+  tbl.style.display = '';
+  empty.style.display = 'none';
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    tr.className = 'val-row ' + (row.status === 'success' ? 'ok' : 'bad');
+    tr.innerHTML = `
+      <td data-label="Time">${row.timestamp}</td>
+      <td data-label="Device"><a href="/devices/${encodeURIComponent(row.device_id)}/history">${row.device_id}</a></td>
+      <td data-label="Status"><span class="status-badge ${row.status}">${row.status}</span></td>
+      <td data-label="Reason">${row.reason || ''}</td>
+      <td data-label="Scanner location">${(row.scanner_lat !== null && row.scanner_lng !== null)
+          ? `${row.scanner_lat.toFixed(4)}, ${row.scanner_lng.toFixed(4)}` : '—'}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+loadValidations();
+</script>
+{% endblock %}

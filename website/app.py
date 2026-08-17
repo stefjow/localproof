@@ -151,6 +151,34 @@ def get_my_inactive_devices():
     devices_list = [dict(device) for device in devices]
     return jsonify(devices_list)
 
+@app.route('/api/my-devices')
+@login_required
+def get_my_devices():
+    """All devices owned by current_user. Excludes pubkey."""
+    conn = get_db_connection()
+    devices = conn.execute(
+        '''SELECT device_id, name, description, lat, lng, max_validations, active, timestamp
+           FROM devices WHERE username = ?
+           ORDER BY timestamp DESC''',
+        (current_user.username,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(d) for d in devices])
+
+@app.route('/api/my-validations')
+@login_required
+def get_my_validations():
+    """Validation attempts made by current_user (as scanner)."""
+    conn = get_db_connection()
+    logs = conn.execute(
+        '''SELECT timestamp, device_id, status, reason, scanner_lat, scanner_lng, code_ts
+           FROM validation_logs WHERE username = ?
+           ORDER BY timestamp DESC''',
+        (current_user.username,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(log) for log in logs])
+
 # Update validation logs to include username
 def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None, code_ts=None):
     username = current_user.username if current_user.is_authenticated else "unknown"
@@ -220,10 +248,13 @@ def validate_signed(device_id, payload_b64, sig_b64):
     ''', (device_id,)).fetchall()
     device = conn.execute('SELECT * FROM devices WHERE device_id = ?', (device_id,)).fetchone()
 
+    username = current_user.username if current_user.is_authenticated else "unknown"
+
     if not device or not device['pubkey']:
         conn.close()
         log_validation(device_id, "failed", "Invalid Device ID" if not device else "Device Has No Public Key")
-        return render_template('map.html', devices=devices, status="Invalid Device ID", success="false")
+        return render_template('map.html', devices=devices, username=username,
+                               status="Invalid Device ID", success="false")
 
     nonce = secrets.token_urlsafe(16)
     conn.execute(
@@ -234,7 +265,7 @@ def validate_signed(device_id, payload_b64, sig_b64):
     conn.commit()
     conn.close()
 
-    return render_template('map.html', devices=devices, nonce=nonce)
+    return render_template('map.html', devices=devices, username=username, nonce=nonce)
 
 def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
     """Step 2 of the challenge flow: verify signature, freshness and location."""
@@ -363,6 +394,8 @@ def add_device_route():
     lat = data.get('lat')
     lng = data.get('lng')
     max_validations = data.get('max_validations')
+    name = (data.get('name') or '').strip()[:80]
+    description = (data.get('description') or '').strip()[:200]
 
     if not device_id or not pubkey:
         return jsonify({'success': False, 'message': 'Device ID and public key are required.'})
@@ -388,14 +421,16 @@ def add_device_route():
         return jsonify({'success': False, 'message': 'Device ID already exists. Please try again.'})
 
     try:
-        add_device(device_id, '', lat, lng, max_validations, current_user.username, pubkey)
+        add_device(device_id, '', lat, lng, max_validations, current_user.username, pubkey,
+                   name=name, description=description)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
     finally:
         conn.close()
 
-def add_device(device_id, secret='', lat=None, lng=None, max_validations=1, username=None, pubkey=None):
+def add_device(device_id, secret='', lat=None, lng=None, max_validations=1, username=None, pubkey=None,
+               name='', description=''):
     """
     Adds a device to the database.
 
@@ -406,16 +441,110 @@ def add_device(device_id, secret='', lat=None, lng=None, max_validations=1, user
     :param max_validations: Max validations per signed code.
     :param username: Username of the user who added the device.
     :param pubkey: ECDSA P-256 public key in PEM format.
+    :param name: Owner-editable display name (optional).
+    :param description: Owner-editable description (optional).
     """
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO devices (device_id, lat, lng, max_validations, username, pubkey)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (device_id, lat, lng, max_validations, username, pubkey))
+        INSERT INTO devices (device_id, lat, lng, max_validations, username, pubkey, name, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (device_id, lat, lng, max_validations, username, pubkey, name, description))
     conn.commit()
     conn.close()
     print(f"Device '{device_id}' added successfully by user '{username}'.")
+
+@app.route('/update-device/<device_id>', methods=['PUT'])
+@login_required
+def update_device(device_id):
+    """Owner-only partial update of device metadata."""
+    data = request.get_json(silent=True) or {}
+
+    conn = get_db_connection()
+    device = conn.execute('SELECT username FROM devices WHERE device_id = ?', (device_id,)).fetchone()
+    if not device:
+        conn.close()
+        return jsonify({'success': False, 'message': 'Device not found.'})
+    if device['username'] != current_user.username:
+        conn.close()
+        return jsonify({'success': False, 'message': 'You are not the owner of this device.'})
+
+    fields = []
+    values = []
+
+    if 'name' in data:
+        fields.append('name = ?')
+        values.append((data.get('name') or '').strip()[:80])
+    if 'description' in data:
+        fields.append('description = ?')
+        values.append((data.get('description') or '').strip()[:200])
+    if 'lat' in data:
+        try:
+            fields.append('lat = ?')
+            values.append(float(data['lat']) if data['lat'] is not None else None)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'success': False, 'message': 'Invalid lat.'})
+    if 'lng' in data:
+        try:
+            fields.append('lng = ?')
+            values.append(float(data['lng']) if data['lng'] is not None else None)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'success': False, 'message': 'Invalid lng.'})
+    if 'max_validations' in data:
+        try:
+            mv = int(data['max_validations'])
+            if mv < 1:
+                mv = 1
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'success': False, 'message': 'Invalid max_validations.'})
+        fields.append('max_validations = ?')
+        values.append(mv)
+    if 'active' in data:
+        fields.append('active = ?')
+        values.append(1 if data['active'] else 0)
+
+    if not fields:
+        conn.close()
+        return jsonify({'success': False, 'message': 'No updatable fields provided.'})
+
+    values.append(device_id)
+    try:
+        conn.execute(f'UPDATE devices SET {", ".join(fields)} WHERE device_id = ?', values)
+        conn.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/my-devices', methods=['GET'])
+@login_required
+def my_devices_page():
+    return render_template('my_devices.html', username=current_user.username)
+
+@app.route('/my-validations', methods=['GET'])
+@login_required
+def my_validations_page():
+    return render_template('my_validations.html', username=current_user.username)
+
+@app.route('/devices/<device_id>/history', methods=['GET'])
+def device_history_page(device_id):
+    conn = get_db_connection()
+    device = conn.execute(
+        'SELECT device_id, name, description, lat, lng, active, username FROM devices WHERE device_id = ?',
+        (device_id,)
+    ).fetchone()
+    conn.close()
+    username = current_user.username if current_user.is_authenticated else "unknown"
+    return render_template(
+        'device_history.html',
+        device=dict(device) if device else None,
+        device_id=device_id,
+        username=username,
+    )
 
 @app.route('/delete-device/<device_id>', methods=['DELETE'])
 @login_required

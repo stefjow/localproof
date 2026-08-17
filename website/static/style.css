@@ -1,231 +1,257 @@
-/* html, body {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    overflow: hidden;
-} */
-html {
-    height: 100%;
-    min-height: 100vh;
-    overflow: hidden;
-}
-body {
-    padding: 0px;
-    margin: 0px;
-    /* align-items: center;
-    justify-content: center; */
-    min-height: 100%;
-    height: 100%;
-}
-.inactive-device-icon {
-    opacity: 0.5;
-    filter: grayscale(50%);
-}
-#map {
-    height: 100vh;
-    width: 100vw;
-    background: #000;
-}
-.leaflet-popup-content {
-    font-size: 16px;
-}
-.leaflet-popup-content-wrapper {
-    border-radius: 0;
-}
-.leaflet-layer,
-.leaflet-control-zoom-in,
-.leaflet-control-zoom-out,
-.leaflet-control-attribution {
-    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-}
-.popup-headline {
-    font-weight: bold;
-    font-size: 18px;
-    margin-bottom: 8px;
+:root {
+  --bg: #0a0d10;
+  --panel: rgba(20, 24, 28, 0.92);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --text: #e6ebf0;
+  --text-muted: #9aa4ad;
+  --accent: #4fb0b4;
+  --danger: #db4325;
+  --success: #006164;
+  --border: rgba(255, 255, 255, 0.08);
+  --font: "Helvetica Neue", Arial, Helvetica, sans-serif;
 }
 
-.popup-content {
-    max-height: 300px; /* Adjust as needed */
-    overflow-y: hidden; /* Enable vertical scrolling */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; min-height: 100%; }
+html { height: 100%; }
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
 }
-#status-message {
-    position: absolute;
-    top: 30%;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 1000;
-    background: white;
-    padding: 10px;
-    border: 2px solid rgba(0,0,0,0.2);
-    border-radius: 4px;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 10pt;
-    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-    animation: blinkBackground 3s infinite; /* Add blinking animation */
+
+/* -- Page shell (inner pages) ------------------------------------------- */
+body.page { overflow-y: auto; }
+.page-main { max-width: 960px; margin: 0 auto; padding: 88px 20px 40px; }
+.inner h1 { margin: 0 0 20px; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.inner h2 { margin: 32px 0 12px; font-size: 18px; font-weight: 600; }
+.inner .hint { color: var(--text-muted); margin: 0 0 20px; }
+.inner .empty {
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  text-align: center;
 }
-@keyframes blinkBackground {
-    0% {
-        background-color: white; /* Start with white */
-    }
-    50% {
-        background-color: #ffcccc; /* Midway color (light red) */
-    }
-    100% {
-        background-color: white; /* Return to white */
-    }
+
+/* -- Map page ----------------------------------------------------------- */
+body.page-map { overflow: hidden; }
+#map { position: fixed; inset: 0; width: 100vw; height: 100vh; background: #000; }
+body.page-map .maplibregl-canvas { outline: none; }
+
+/* -- Auth panel (top-right on every page) ------------------------------- */
+#auth-panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  max-width: calc(100vw - 24px);
 }
-.emoji-marker {
-    font-size: 24px;
-    text-align: center;
-    line-height: 1;
-}
-.validation-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-    margin-bottom: 10px;
-}
-.validation-table th,
-.validation-table td {
-    padding: 8px;
-    border: 1px solid #ddd;
-    text-align: left;
-}
-.validation-table th {
-    background-color: #f2f2f2;
-    position: sticky;
-    top: 0; /* Make table headers sticky */
-    z-index: 1; /* Ensure headers stay above the table body */
-}
-#login-form {
-    display: none; /* Hide by default */
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    z-index: 1000;
-    background: white;
-    padding: 10px;
-    border: 2px solid rgba(0,0,0,0.2);
-    border-radius: 4px;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 10pt;
-    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+#login-form,
+#user-info {
+  background: var(--panel);
+  color: var(--text);
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  min-width: 220px;
 }
 #login-form input {
-    display: block;
-    margin-bottom: 5px;
-    padding: 5px;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 10pt;
-    width: 150px;
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  font-family: var(--font);
+  font-size: 14px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 40px;
 }
-#login-form button {
-    padding: 3px 7px;
-    cursor: pointer;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 10pt;
-}
-#user-info {
-    display: none; /* Hide by default */
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    z-index: 1000;
-    background: white;
-    padding: 10px;
-    border: 2px solid rgba(0,0,0,0.2);
-    border-radius: 4px;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 10pt;
-    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-}
+#login-form input:focus,
+button:focus,
+select:focus,
+textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.login-buttons { display: flex; gap: 8px; }
+#login-form button,
 #user-info button {
-    padding: 3px 7px;
-    cursor: pointer;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 10pt;
+  padding: 8px 12px;
+  font-family: var(--font);
+  font-size: 13px;
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  min-height: 40px;
+  flex: 1;
 }
-.popup-form {
-    padding: 10px;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-}
-.popup-content input {
-    //display: block;
-    margin-bottom: 5px;
-    //padding: 5px;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 14px;
-    width: 100px;
-}
-.popup-form input[readonly] {
-    display: block;
-    margin-bottom: 5px;
-    padding: 5px;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 14px;
-    width: 150px;
-    cursor: not-allowed;
-}
-.popup-form button {
-    padding: 3px 7px;
-    cursor: pointer;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
-    font-size: 14px;
-}
+#login-form button:hover,
+#user-info button:hover { background: rgba(255,255,255,0.14); }
+.user-info-line { margin-bottom: 8px; }
+.user-name { color: var(--accent); font-weight: 600; }
+.auth-nav { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; }
+.auth-nav a { padding: 4px 0; }
 
-a {
-    text-decoration: none; /* Remove underline */
-    color: #007BFF; /* Default link color (blue) */
-    transition: color 0.3s ease; /* Smooth color transition on hover */
+/* -- Device management (cards + edit form) ------------------------------ */
+.device-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 14px;
 }
-
-a:hover {
-    color: #0056b3; /* Darker blue on hover */
+.device-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.device-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.device-active-badge {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border);
 }
+.device-active-badge.active { background: rgba(0, 97, 100, 0.35); color: #a7e2e4; }
+.device-active-badge.inactive { color: var(--text-muted); }
+.device-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px;
+  margin: 16px 0 0; padding: 0; font-size: 14px;
+}
+.device-meta > div { margin: 0; }
+.device-meta dt { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.device-meta dd { margin: 2px 0 0; word-break: break-word; }
+.device-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; align-items: center; }
+.device-actions button,
+.device-actions .btn-link {
+  padding: 8px 12px; font-family: var(--font); font-size: 13px;
+  background: rgba(255,255,255,0.08); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  text-decoration: none; min-height: 40px; display: inline-flex; align-items: center;
+}
+.device-actions button:hover,
+.device-actions .btn-link:hover { background: rgba(255,255,255,0.14); }
+.device-actions .danger { background: rgba(219, 67, 37, 0.15); border-color: rgba(219, 67, 37, 0.4); }
+.device-actions .danger:hover { background: rgba(219, 67, 37, 0.25); }
 
-/* Overlay Styles */
+.device-edit-form { margin-top: 16px; display: grid; gap: 10px; }
+.device-edit-form label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.device-edit-form input {
+  padding: 8px 10px; background: rgba(255,255,255,0.06); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; font-family: var(--font); font-size: 14px;
+  min-height: 40px;
+}
+.device-edit-form .form-actions { display: flex; gap: 8px; margin-top: 4px; }
+.device-edit-form button {
+  padding: 8px 14px; font-family: var(--font); font-size: 13px;
+  background: rgba(255,255,255,0.08); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer; min-height: 40px;
+}
+.device-edit-form button[type="submit"] { background: rgba(0, 97, 100, 0.35); border-color: rgba(0, 97, 100, 0.6); }
+
+/* -- Validation tables (my-validations, device-history) ------------------ */
+.validations-table {
+  width: 100%; border-collapse: collapse; margin-top: 12px;
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; overflow: hidden;
+}
+.validations-table th, .validations-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
+.validations-table th { color: var(--text-muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; background: rgba(255,255,255,0.03); }
+.validations-table tr:last-child td { border-bottom: none; }
+.val-row.ok td { }
+.val-row.bad td { color: var(--text-muted); }
+.status-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+}
+.status-badge.success { color: #a7e2e4; background: rgba(0, 97, 100, 0.35); border-color: rgba(0, 97, 100, 0.6); }
+.status-badge.failed { color: #f4b3a5; background: rgba(219, 67, 37, 0.15); border-color: rgba(219, 67, 37, 0.4); }
+
+/* -- Popup content ------------------------------------------------------- */
+.maplibregl-popup-content {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  font-family: var(--font);
+  font-size: 14px;
+  padding: 12px 14px;
+}
+.maplibregl-popup-tip { border-top-color: rgba(20,24,28,0.92) !important; border-bottom-color: rgba(20,24,28,0.92) !important; }
+.maplibregl-popup-close-button { color: var(--text); font-size: 20px; padding: 4px 8px; }
+.popup-headline { font-weight: 600; font-size: 15px; margin-bottom: 8px; }
+.popup-content { max-width: 340px; }
+.popup-scroll { max-height: 200px; overflow-y: auto; margin-top: 6px; }
+.popup-links { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 13px; }
+.popup-content .register-form { display: flex; flex-direction: column; gap: 6px; }
+.popup-content label { display: grid; gap: 3px; font-size: 12px; color: var(--text-muted); }
+.popup-content input,
+.popup-content textarea {
+  width: 100%; padding: 6px 8px; background: rgba(255,255,255,0.06); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; font-family: var(--font); font-size: 13px;
+  min-height: 36px;
+}
+.popup-content textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 84px; }
+.popup-content button { padding: 8px 12px; font-family: var(--font); font-size: 13px;
+  background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; cursor: pointer; min-height: 44px; }
+.popup-content button:hover { background: rgba(255,255,255,0.14); }
+.popup-content a { color: var(--accent); }
+
+/* Legacy popup table used by the map's per-marker log view */
+.validation-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+.validation-table th, .validation-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+.validation-table th { color: var(--text-muted); font-weight: 500; }
+
+/* -- Emoji marker (📱, 🛰️) ---------------------------------------------- */
+.emoji-marker { font-size: 26px; line-height: 1; text-align: center; cursor: pointer; }
+
+/* Custom inactive marker */
+.maplibregl-marker-default.inactive { opacity: 0.5; }
+
+/* -- Overlay (challenge status circle) ---------------------------------- */
 .overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.5); /* Dimmed background */
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 1001;
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 1001;
 }
-
 .overlay-circle {
-    width: 300px;
-    height: 300px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
+  width: 280px; height: 280px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
 }
-
-.overlay-circle svg {
-    width: 100%;
-    height: 100%;
-}
-
-.overlay-circle text {
-    font-size: 4rem;
-    font-weight: bold;
-    fill: white;
-}
-
+.overlay-circle svg { width: 100%; height: 100%; }
+.overlay-circle text { font-size: 4rem; font-weight: bold; fill: white; }
 .overlay-status {
-    margin-top: 20px;
-    font-size: 1.5rem;
-    color: white;
-    text-align: center;
-    font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+  margin-top: 20px; font-size: 1.4rem; color: white; text-align: center;
+  font-family: var(--font); padding: 0 16px;
+}
+
+a { text-decoration: none; color: var(--accent); transition: color 0.2s ease; }
+a:hover { color: #7fd4d8; }
+
+/* -- Mobile pass -------------------------------------------------------- */
+@media (max-width: 640px) {
+  #auth-panel {
+    top: 8px; right: 8px; left: 8px; max-width: none;
+  }
+  #login-form, #user-info { min-width: 0; width: 100%; }
+  .auth-nav { gap: 4px 12px; }
+
+  .page-main { padding: 140px 14px 40px; }
+  .device-meta { grid-template-columns: 1fr; }
+
+  /* Tables reflow to stacked cards */
+  .validations-table thead { display: none; }
+  .validations-table, .validations-table tbody, .validations-table tr, .validations-table td { display: block; width: 100%; }
+  .validations-table tr {
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 10px; margin-bottom: 10px; padding: 4px 12px;
+  }
+  .validations-table td { border-bottom: 1px solid var(--border); padding: 8px 0; }
+  .validations-table tr td:last-child { border-bottom: none; }
+  .validations-table td::before {
+    content: attr(data-label); display: block;
+    font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;
+  }
+  .overlay-circle { width: 200px; height: 200px; }
+  .overlay-status { font-size: 1.1rem; }
 }

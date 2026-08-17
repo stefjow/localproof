@@ -1,0 +1,60 @@
+{% extends '_base.html' %}
+{% block title %}LOCALPROOF: {{ device.device_id if device else device_id }}{% endblock %}
+{% block content %}
+<section class="inner">
+  {% if device %}
+    <h1>{{ device.name or device.device_id }}</h1>
+    <dl class="device-meta">
+      <div><dt>Device ID</dt><dd>{{ device.device_id }}</dd></div>
+      {% if device.description %}<div><dt>Description</dt><dd>{{ device.description }}</dd></div>{% endif %}
+      <div><dt>Location</dt><dd>
+        {% if device.lat is not none and device.lng is not none %}
+          {{ '%.4f'|format(device.lat) }}, {{ '%.4f'|format(device.lng) }}
+        {% else %}—{% endif %}
+      </dd></div>
+      <div><dt>Owner</dt><dd>{{ device.username }}</dd></div>
+      <div><dt>Status</dt><dd>{{ 'Active' if device.active else 'Inactive' }}</dd></div>
+    </dl>
+    <h2>Validation history</h2>
+    <table class="validations-table" id="history-table" style="display:none;">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Status</th>
+          <th>Reason</th>
+          <th>Scanner</th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+    <div id="history-empty" class="empty" style="display:none;">No validation attempts recorded yet.</div>
+    <script>
+    async function loadHistory() {
+      const r = await fetch(`/validation-logs/{{ device.device_id }}`);
+      const rows = await r.json();
+      const tbl = document.getElementById('history-table');
+      const tbody = document.getElementById('history-body');
+      const empty = document.getElementById('history-empty');
+      if (!rows.length) { empty.style.display = 'block'; return; }
+      tbl.style.display = '';
+      for (const row of rows) {
+        const tr = document.createElement('tr');
+        tr.className = 'val-row ' + (row.status === 'success' ? 'ok' : 'bad');
+        tr.innerHTML = `
+          <td data-label="Time">${row.timestamp}</td>
+          <td data-label="Status"><span class="status-badge ${row.status}">${row.status}</span></td>
+          <td data-label="Reason">${row.reason || ''}</td>
+          <td data-label="Scanner">${row.username}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+    loadHistory();
+    </script>
+  {% else %}
+    <h1>Device not found</h1>
+    <p>No device with id <code>{{ device_id }}</code> exists.</p>
+    <p><a href="/">Back to the map</a></p>
+  {% endif %}
+</section>
+{% endblock %}

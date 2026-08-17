@@ -1,0 +1,59 @@
+{# Auth panel: login form when logged out, user-info + nav when logged in.
+   Included by map.html and by _base.html (which wraps the inner pages). #}
+<div id="auth-panel">
+  {% if current_user.is_authenticated %}
+    <div id="user-info">
+      <div class="user-info-line">
+        Logged in as <span class="user-name">{{ current_user.username }}</span>
+      </div>
+      <nav class="auth-nav">
+        <a href="/">Map</a>
+        <a href="/my-devices">My Devices</a>
+        <a href="/my-validations">My Validations</a>
+        <a href="#" onclick="logout(); return false;">Logout</a>
+      </nav>
+    </div>
+  {% else %}
+    <div id="login-form">
+      <input type="text" id="username" placeholder="Username" autocomplete="username">
+      <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+      <div class="login-buttons">
+        <button onclick="login()">Login</button>
+        <button onclick="register()">Register</button>
+      </div>
+    </div>
+  {% endif %}
+</div>
+<script>
+  async function login() {
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    if (!username || !password) { alert('Username and password are required'); return; }
+    const r = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+    });
+    const data = await r.json();
+    if (data.success) { location.reload(); }
+    else { alert(data.error || 'Login failed'); }
+  }
+  async function register() {
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    if (!username || !password) { alert('Username and password are required'); return; }
+    const r = await fetch('/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+    });
+    const data = await r.json();
+    if (data.success) { alert('Registration successful. Please log in.'); }
+    else { alert(data.error || 'Registration failed'); }
+  }
+  async function logout() {
+    const r = await fetch('/logout');
+    const data = await r.json();
+    if (data.success) { location.reload(); }
+  }
+</script>

@@ -57,11 +57,14 @@ CREATE TABLE IF NOT EXISTS pending_validations (
 # Migrations (no-ops on fresh databases):
 # - scanner location and signed-code timestamp columns on validation_logs
 # - ECDSA public key (PEM) on devices for the signature scheme
+# - owner-editable device metadata: name, description
 for table, column in (
     ('validation_logs', 'scanner_lat REAL'),
     ('validation_logs', 'scanner_lng REAL'),
     ('validation_logs', 'code_ts INTEGER'),
     ('devices', 'pubkey TEXT'),
+    ('devices', 'name TEXT'),
+    ('devices', 'description TEXT'),
 ):
     try:
         cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column}')

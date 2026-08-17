@@ -1,0 +1,137 @@
+{% extends '_base.html' %}
+{% block title %}LOCALPROOF: My Devices{% endblock %}
+{% block content %}
+<section class="inner">
+  <h1>My Devices</h1>
+  <div id="devices-empty" class="empty" style="display:none;">
+    You haven't registered any devices yet. Open the
+    <a href="/">map</a> and right-click a location to add one.
+  </div>
+  <div id="devices-list"></div>
+</section>
+
+<template id="device-card-template">
+  <article class="device-card" data-device-id="">
+    <header class="device-head">
+      <h2 class="device-name"></h2>
+      <span class="device-active-badge"></span>
+    </header>
+    <dl class="device-meta">
+      <div><dt>Device ID</dt><dd class="device-id"></dd></div>
+      <div><dt>Description</dt><dd class="device-description"></dd></div>
+      <div><dt>Location</dt><dd class="device-latlng"></dd></div>
+      <div><dt>Max validations / code</dt><dd class="device-maxv"></dd></div>
+    </dl>
+    <div class="device-actions">
+      <button class="btn-edit">Edit</button>
+      <button class="btn-toggle-active"></button>
+      <a class="btn-link" href="#">Full history →</a>
+      <button class="btn-delete danger">Delete</button>
+    </div>
+    <form class="device-edit-form" style="display:none;">
+      <label>Name <input name="name" maxlength="80"></label>
+      <label>Description <input name="description" maxlength="200"></label>
+      <label>Lat <input name="lat" type="number" step="any"></label>
+      <label>Lng <input name="lng" type="number" step="any"></label>
+      <label>Max validations / code <input name="max_validations" type="number" min="1"></label>
+      <div class="form-actions">
+        <button type="submit">Save</button>
+        <button type="button" class="btn-cancel">Cancel</button>
+      </div>
+    </form>
+  </article>
+</template>
+
+<script>
+async function loadDevices() {
+  const r = await fetch('/api/my-devices');
+  const devices = await r.json();
+  const list = document.getElementById('devices-list');
+  list.innerHTML = '';
+  document.getElementById('devices-empty').style.display = devices.length ? 'none' : 'block';
+  const tpl = document.getElementById('device-card-template');
+  for (const d of devices) list.appendChild(renderCard(tpl, d));
+  // Scroll to hash-linked device if present
+  if (location.hash) {
+    const el = document.querySelector(location.hash);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function renderCard(tpl, d) {
+  const node = tpl.content.firstElementChild.cloneNode(true);
+  node.dataset.deviceId = d.device_id;
+  node.id = 'device-' + d.device_id;
+  node.querySelector('.device-name').textContent = d.name || d.device_id;
+  node.querySelector('.device-id').textContent = d.device_id;
+  node.querySelector('.device-description').textContent = d.description || '—';
+  node.querySelector('.device-latlng').textContent =
+    (d.lat !== null && d.lng !== null) ? `${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}` : '—';
+  node.querySelector('.device-maxv').textContent = d.max_validations;
+  const badge = node.querySelector('.device-active-badge');
+  badge.textContent = d.active ? 'Active' : 'Inactive';
+  badge.classList.add(d.active ? 'active' : 'inactive');
+  node.querySelector('.btn-link').href = `/devices/${encodeURIComponent(d.device_id)}/history`;
+  const toggleBtn = node.querySelector('.btn-toggle-active');
+  toggleBtn.textContent = d.active ? 'Deactivate' : 'Activate';
+  toggleBtn.addEventListener('click', () => setActive(d.device_id, !d.active));
+  node.querySelector('.btn-delete').addEventListener('click', () => deleteDevice(d.device_id));
+  node.querySelector('.btn-edit').addEventListener('click', () => openEdit(node, d));
+  node.querySelector('.btn-cancel').addEventListener('click', () => closeEdit(node));
+  node.querySelector('.device-edit-form').addEventListener('submit', (e) => submitEdit(e, d.device_id));
+  return node;
+}
+
+function openEdit(node, d) {
+  const form = node.querySelector('.device-edit-form');
+  form.name.value = d.name || '';
+  form.description.value = d.description || '';
+  form.lat.value = d.lat ?? '';
+  form.lng.value = d.lng ?? '';
+  form.max_validations.value = d.max_validations;
+  form.style.display = 'block';
+}
+function closeEdit(node) { node.querySelector('.device-edit-form').style.display = 'none'; }
+
+async function submitEdit(e, deviceId) {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    name: f.name.value,
+    description: f.description.value,
+    lat: f.lat.value === '' ? null : parseFloat(f.lat.value),
+    lng: f.lng.value === '' ? null : parseFloat(f.lng.value),
+    max_validations: parseInt(f.max_validations.value, 10),
+  };
+  const r = await fetch(`/update-device/${encodeURIComponent(deviceId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json();
+  if (data.success) loadDevices();
+  else alert(data.message || 'Update failed');
+}
+
+async function setActive(deviceId, active) {
+  const r = await fetch(`/update-device/${encodeURIComponent(deviceId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
+  const data = await r.json();
+  if (data.success) loadDevices();
+  else alert(data.message || 'Update failed');
+}
+
+async function deleteDevice(deviceId) {
+  if (!confirm(`Delete device ${deviceId}? This cannot be undone.`)) return;
+  const r = await fetch(`/delete-device/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+  const data = await r.json();
+  if (data.success) loadDevices();
+  else alert(data.message || 'Delete failed');
+}
+
+loadDevices();
+</script>
+{% endblock %}

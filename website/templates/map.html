@@ -1,30 +1,27 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="utf-8">
     <title>LOCALPROOF: MAP</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="/static/style.css">
     <style>
         .overlay-circle {
             background: {% if nonce %}rgba(100, 100, 100, 1){% elif success == 'true' %}rgba(0, 97, 100, 1){% else %}rgba(219, 67, 37, 1){% endif %};
         }
-
     </style>
 </head>
-<body>
+<body class="page page-map">
     {% if status or nonce %}
     <div class="overlay" id="status-overlay">
         <div class="overlay-circle" id="overlay-circle">
             <svg viewBox="0 0 100 100">
                 {% if nonce %}
-                <!-- Pending challenge -->
                 <text id="overlay-mark" x="50" y="55" text-anchor="middle" dominant-baseline="middle">?</text>
                 {% elif success == 'true' %}
-                <!-- Checkmark -->
                 <text x="50" y="60" text-anchor="middle" dominant-baseline="middle">✓</text>
                 {% else %}
-                <!-- Big X -->
                 <text x="50" y="55" text-anchor="middle" dominant-baseline="middle">✗</text>
                 {% endif %}
             </svg>
@@ -33,335 +30,171 @@
     </div>
     {% endif %}
     <div id="map"></div>
-    <div id="login-form">
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="login()">Login</button>
-        <button onclick="register()">Register</button>
-    </div>
-    <div id="user-info" style="display: none;">
-        Logged in as: <span id="logged-in-username"></span>
-        (<a href="#" onclick="logout()">logout</a>)
-    </div>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    {% include '_auth_panel.html' %}
+    <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
     <script>
-        // Initialize the map
-        var map = L.map('map', {
-            maxZoom: 18,
-            zoomControl: true,
-            maxNativeZoom: 20
+        // MapLibre GL: raster tiles from CARTO dark_all give us native dark
+        // tiles (no CSS-filter hack), and globe projection turns it into a globe.
+        const cartoDarkStyle = {
+            version: 8,
+            sources: {
+                carto: {
+                    type: 'raster',
+                    tiles: [
+                        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                        'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                    ],
+                    tileSize: 256,
+                    attribution: '© <a href="https://carto.com/attributions">CARTO</a>',
+                }
+            },
+            layers: [{ id: 'carto', type: 'raster', source: 'carto' }],
+            sky: {}
+        };
+
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: cartoDarkStyle,
+            center: [0, 20],
+            zoom: 1.2,
+            attributionControl: { compact: true },
         });
+        map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+        map.on('style.load', () => { map.setProjection({ type: 'globe' }); });
 
-        // Add OpenStreetMap tiles
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            //attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            attribution: '© <a href="https://carto.com/attributions">CARTO</a>'
-        }).addTo(map);
+        const registeredMarkers = [];
+        const markers = [];
+        const bounds = new maplibregl.LngLatBounds();
 
-        // Round lat/lng to 4 decimal places
-        function roundToFourDecimals(num) {
-            return Math.round(num * 10000) / 10000;
-        }
-
-        // Function to generate a random string
+        function roundToFourDecimals(num) { return Math.round(num * 10000) / 10000; }
         function generateRandomString(length) {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            let result = '';
-            for (let i = 0; i < length; i++) {
-                result += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
-            return result;
+            let s = '';
+            for (let i = 0; i < length; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+            return s;
         }
 
-        // Function to fetch validation logs for a device
-        async function fetchValidationLogs(device_id) {
+        function makeEmojiMarker(emoji) {
+            const el = document.createElement('div');
+            el.className = 'emoji-marker';
+            el.textContent = emoji;
+            return new maplibregl.Marker({ element: el });
+        }
+
+        async function fetchValidationLogs(deviceId) {
             try {
-                const response = await fetch(`/validation-logs/${device_id}`);
-                if (!response.ok) throw new Error('Failed to fetch validation logs');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching validation logs:', error);
-                return [];
-            }
-        }
-        
-        // Function to handle login
-        async function login() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            if (!username || !password) {
-                alert('Username and password are required');
-                return;
-            }
-            const response = await fetch('/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-            });
-            const data = await response.json();
-            if (data.success) {
-                loadInactiveDevices();
-                registeredDeviceMarkers = [];
-                document.getElementById('login-form').style.display = 'none';
-                document.getElementById('user-info').style.display = 'block';
-                document.getElementById('logged-in-username').textContent = data.username;
-            } else {
-                alert(data.error || 'Login failed');
-            }
-        }
-        // Call this after successful login
-        function onLoginSuccess() {
-            loadInactiveDevices();
-            // ... your existing login success code
+                const r = await fetch(`/validation-logs/${encodeURIComponent(deviceId)}`);
+                if (!r.ok) throw new Error('logs fetch failed');
+                return await r.json();
+            } catch (e) { console.error(e); return []; }
         }
 
-        // Function to handle registration
-        async function register() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            if (!username || !password) {
-                alert('Username and password are required');
-                return;
-            }
-            const response = await fetch('/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-            });
-            const data = await response.json();
-            if (data.success) {
-                alert('Registration successful. Please log in.');
-            } else {
-                alert(data.error || 'Registration failed');
-            }
-        }
-        registeredDeviceMarkers = [];
-        // Function to handle logout
-        async function logout() {
-            const response = await fetch('/logout');
-            const data = await response.json();
-            if (data.success) {
-                registeredDeviceMarkers.forEach(marker => map.removeLayer(marker));
-                
-                inactiveDeviceMarkers.forEach(marker => map.removeLayer(marker));
-                inactiveDeviceMarkers = [];
-                //location.reload();  // Reload the page to reflect the changes
-                document.getElementById('login-form').style.display = 'block';
-                document.getElementById('user-info').style.display = 'none';
-            }
+        function renderValidationLogs(logs) {
+            const success = logs.filter(l => l.status === 'success');
+            if (!success.length) return '<p>No successful validation attempts.</p>';
+            let out = '<table class="validation-table"><thead><tr><th>Timestamp</th><th>User</th></tr></thead><tbody>';
+            for (const l of success) out += `<tr><td>${l.timestamp}</td><td>${l.username}</td></tr>`;
+            return out + '</tbody></table>';
         }
 
-        // Global variable to store inactive device markers
-        let inactiveDeviceMarkers = [];
-
-        // Function to fetch and display inactive devices
+        {% if current_user.is_authenticated %}
+        const inactiveMarkers = [];
         async function loadInactiveDevices() {
             try {
-                const response = await fetch('/api/my-inactive-devices');
-                const devices = await response.json();
-                
-                // Clear existing inactive markers
-                inactiveDeviceMarkers.forEach(marker => map.removeLayer(marker));
-                inactiveDeviceMarkers = [];
-                
-                // Add new inactive devices with reduced opacity
-                devices.forEach(device => {
-                    if (device.lat && device.lng) {
-                        //const marker = L.marker([device.lat, device.lng]).addTo(map);
-                        const marker = L.marker([device.lat, device.lng], {
-                            opacity: 0.5,
-                            // icon: L.divIcon({
-                            //     className: 'inactive-device-icon'
-                            // //     html: `<div>${device.device_id}</div>`
-                            // })
-                        }).addTo(map);
-                        marker.bindPopup(`<div class="popup-content">Device ID: ${device.device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`)
-                        inactiveDeviceMarkers.push(marker);
-                    }
-                });
-            } catch (error) {
-                console.error('Error loading inactive devices:', error);
-            }
+                const r = await fetch('/api/my-inactive-devices');
+                const devices = await r.json();
+                inactiveMarkers.forEach(m => m.remove());
+                inactiveMarkers.length = 0;
+                for (const d of devices) {
+                    if (d.lat == null || d.lng == null) continue;
+                    const el = document.createElement('div');
+                    el.className = 'maplibregl-marker-default inactive';
+                    const marker = new maplibregl.Marker({ element: el })
+                        .setLngLat([d.lng, d.lat])
+                        .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
+                            `<div class="popup-content">Device ID: ${d.device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`))
+                        .addTo(map);
+                    inactiveMarkers.push(marker);
+                }
+            } catch (e) { console.error(e); }
         }
+        loadInactiveDevices();
+        {% endif %}
 
-
-        // Check login status on page load
-        async function checkLogin() {
-            const response = await fetch('/check-login');
-            const data = await response.json();
-            if (data.logged_in) {
-                loadInactiveDevices()
-                document.getElementById('login-form').style.display = 'none';
-                document.getElementById('user-info').style.display = 'block';
-                document.getElementById('logged-in-username').textContent = data.username;
-            } else {
-                document.getElementById('login-form').style.display = 'block';
-                document.getElementById('user-info').style.display = 'none';
-            }
-        }
-
-
-        // Function to render validation logs in a table
-        function renderValidationLogs(logs) {
-            // Filter logs to show only successful validations
-            const successfulLogs = logs.filter(log => log.status === "success");
-
-            if (successfulLogs.length === 0) return '<p>No successful validation attempts.</p>';
-
-            let table = `
-                <table class="validation-table">
-                    <thead>
-                        <tr>
-                            <th>Timestamp</th>
-                            <th>User</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-
-            successfulLogs.forEach(log => {
-                table += `
-                    <tr>
-                        <td>${log.timestamp}</td>
-                        <td>${log.username}</td>
-                    </tr>
-                `;
-            });
-
-            table += `
-                    </tbody>
-                </table>
-            `;
-            return table;
-        }
-
-        // Call checkLogin when the page loads
-        window.onload = checkLogin;
-
-        // Create markers for all devices
-        var markers = [];
+        // Devices from the server (all currently active)
         {% for device in devices %}
-            (function(device) {
-                var deviceMarker = L.marker([{{ device.lat }}, {{ device.lng }}]).addTo(map);
-                
-                // Fetch and display validation logs when the popup opens
-                deviceMarker.on('popupopen', async function() {
-                    const logs = await fetchValidationLogs(device.device_id);
-                    const popupContent = `
-                        <div class="popup-headline">Device Location</div>
-                        <div class="popup-content">
-                            Device: ${device.device_id}
-                            <br>
-                            Location: ${roundToFourDecimals({{ device.lat }})}, ${roundToFourDecimals({{ device.lng }})}<br>
-                            Max. Validations per Cycle: {{ device.max_validations }}
-                            <hr>
-                            <strong>Successful Validations:</strong>
-                            <div style="max-height: 200px; overflow-y: auto;">
-                                ${renderValidationLogs(logs)}
-                            </div>
+        (function () {
+            const deviceId = {{ device.device_id|tojson }};
+            const lat = {{ device.lat }};
+            const lng = {{ device.lng }};
+            const name = {{ (device.name or '')|tojson }};
+            const owner = {{ device.username|tojson }};
+            const maxV = {{ device.max_validations }};
+            const currentUser = {{ username|tojson }};
+            const popup = new maplibregl.Popup({ offset: 14, maxWidth: '360px' }).setHTML('Loading…');
+            const marker = new maplibregl.Marker()
+                .setLngLat([lng, lat])
+                .setPopup(popup)
+                .addTo(map);
+            popup.on('open', async () => {
+                const logs = await fetchValidationLogs(deviceId);
+                const ownerLink = (currentUser === owner)
+                    ? `<a href="/my-devices#device-${encodeURIComponent(deviceId)}">Edit / Manage →</a>` : '';
+                popup.setHTML(`
+                    <div class="popup-headline">${name || deviceId}</div>
+                    <div class="popup-content">
+                        Device: ${deviceId}<br>
+                        Location: ${roundToFourDecimals(lat)}, ${roundToFourDecimals(lng)}<br>
+                        Max validations / cycle: ${maxV}
+                        <hr>
+                        <strong>Successful validations:</strong>
+                        <div class="popup-scroll">${renderValidationLogs(logs)}</div>
+                        <div class="popup-links">
+                            <a href="/devices/${encodeURIComponent(deviceId)}/history">Full history →</a>
+                            ${ownerLink}
                         </div>
-                    `;
-                    deviceMarker.setPopupContent(popupContent);
-                });
-
-                deviceMarker.bindPopup('Loading validation logs...');
-                markers.push(deviceMarker);
-            })({
-                device_id: '{{ device.device_id }}',
-                lat: {{ device.lat }},
-                lng: {{ device.lng }},
-                max_validations: {{ device.max_validations }},
-                username: '{{ device.username }}'  // Pass the username to the frontend
+                    </div>
+                `);
             });
-        {% endfor %}   
+            markers.push(marker);
+            bounds.extend([lng, lat]);
+        })();
+        {% endfor %}
 
-        // Check if validation data is available
         {% if esp_lat and esp_lng %}
-            // Add ESP32 GPS location marker
-            var espMarker = L.marker([{{ esp_lat }}, {{ esp_lng }}], {
-                icon: L.divIcon({
-                    className: 'emoji-marker',
-                    html: '🛰️',
-                    iconSize: [32, 32]
-                })
-            }).addTo(map)
-                .bindPopup(`
+        (function () {
+            const espMarker = makeEmojiMarker('🛰️')
+                .setLngLat([{{ esp_lng }}, {{ esp_lat }}])
+                .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(`
                     <div class="popup-headline">Device Location (from ESP32 GPS)</div>
                     <div class="popup-content">
                         Location: ${roundToFourDecimals({{ esp_lat }})}, ${roundToFourDecimals({{ esp_lng }})}
-                    </div>
-                `);
+                    </div>`))
+                .addTo(map);
             markers.push(espMarker);
-
-            // Add database device location marker
-            var deviceMarker = L.marker([{{ device_lat }}, {{ device_lng }}]);//.addTo(map)
-                // .bindPopup(`
-                //     <div class="popup-headline">Device Location (from DB)</div>
-                //     <div class="popup-content">
-                //         Device: {{ device_id }}<br>
-                //         Location: ${roundToFourDecimals({{ device_lat }})}, ${roundToFourDecimals({{ device_lng }})}<br>
-                //         Max. Validations per Cycle: {{ devices[0].max_validations }}
-                //     </div>
-                // `);
-            //markers.push(deviceMarker);
-
-            // Fit bounds to ESP32 and database device locations
-            var initialGroup = L.featureGroup([espMarker, deviceMarker]);
-            map.fitBounds(initialGroup.getBounds());
-
-            // Ask for browser location permission (user position)
-            // if (navigator.geolocation) {
-            //     navigator.geolocation.getCurrentPosition(function(position) {
-            //         var userLat = position.coords.latitude;
-            //         var userLng = position.coords.longitude;
-
-            //         // Add user location marker
-            //         var userMarker = L.marker([userLat, userLng], {
-            //             icon: L.divIcon({
-            //                 className: 'emoji-marker',
-            //                 html: '📱',
-            //                 iconSize: [32, 32]
-            //             })
-            //         }).addTo(map)
-            //             .bindPopup(`
-            //                 <div class="popup-headline">Your Location (from Browser)</div>
-            //                 <div class="popup-content">
-            //                     Location: ${roundToFourDecimals(userLat)}, ${roundToFourDecimals(userLng)}
-            //                 </div>
-            //             `);
-            //         markers.push(userMarker);
-
-            //         // Fit bounds to all 3 locations (ESP32, database device, and browser)
-            //         var finalGroup = L.featureGroup([espMarker, deviceMarker, userMarker]);
-            //         map.fitBounds(finalGroup.getBounds());
-            //     }, function(error) {
-            //         console.error("Error getting location: ", error);
-            //     });
-            // } else {
-            //     console.error("Geolocation is not supported by this browser.");
-            // }
+            bounds.extend([{{ esp_lng }}, {{ esp_lat }}]);
+            {% if device_lat and device_lng %}
+            bounds.extend([{{ device_lng }}, {{ device_lat }}]);
+            {% endif %}
+            map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 0 });
+        })();
         {% else %}
-            // Check if there are markers
-            if (markers.length > 0) {
-                // Create a feature group for all markers
-                var allDevicesGroup = L.featureGroup(markers);
-                // If markers exist, fit the map bounds to the markers
-                map.fitBounds(allDevicesGroup.getBounds());
-                // map.zoomOut(1); // Zoom out one step
-            } else {
-                // If no markers exist, center the map on the world view
-                map.setView([0, 0], 3); // Center at [0, 0] with zoom level 2
+        map.on('load', () => {
+            if (!bounds.isEmpty()) {
+                map.fitBounds(bounds, { padding: 40, maxZoom: 6, duration: 0 });
             }
+        });
         {% endif %}
 
-        // Challenge flow: answer the server's nonce with our geolocation,
-        // then render the validation result.
+        // Challenge flow: answer the server's nonce with our geolocation, then render the result.
         {% if nonce %}
         (function () {
-            var scannerPos = null;
+            let scannerPos = null;
 
             function completeValidation() {
-                var body = { nonce: '{{ nonce }}' };
+                const body = { nonce: '{{ nonce }}' };
                 if (scannerPos) {
                     body.scanner_lat = scannerPos.coords.latitude;
                     body.scanner_lng = scannerPos.coords.longitude;
@@ -369,9 +202,9 @@
                 fetch('/validate/complete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(body),
                 })
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(showResult)
                 .catch(() => showResult({ success: false, status: 'Validation Error' }));
             }
@@ -383,52 +216,40 @@
                 document.getElementById('overlay-status-text').textContent = data.status;
 
                 if (data.esp_lat && data.esp_lng) {
-                    var espMarker = L.marker([data.esp_lat, data.esp_lng], {
-                        icon: L.divIcon({
-                            className: 'emoji-marker',
-                            html: '🛰️',
-                            iconSize: [32, 32]
-                        })
-                    }).addTo(map)
-                        .bindPopup(`
+                    const espMarker = makeEmojiMarker('🛰️')
+                        .setLngLat([data.esp_lng, data.esp_lat])
+                        .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(`
                             <div class="popup-headline">Device Location (from ESP32 GPS)</div>
                             <div class="popup-content">
                                 Location: ${roundToFourDecimals(data.esp_lat)}, ${roundToFourDecimals(data.esp_lng)}
-                            </div>
-                        `);
+                            </div>`))
+                        .addTo(map);
                     markers.push(espMarker);
 
-                    var group = [espMarker];
+                    const b = new maplibregl.LngLatBounds();
+                    b.extend([data.esp_lng, data.esp_lat]);
+
                     if (scannerPos) {
-                        var scannerMarker = L.marker([scannerPos.coords.latitude, scannerPos.coords.longitude], {
-                            icon: L.divIcon({
-                                className: 'emoji-marker',
-                                html: '📱',
-                                iconSize: [32, 32]
-                            })
-                        }).addTo(map)
-                            .bindPopup(`
+                        const sm = makeEmojiMarker('📱')
+                            .setLngLat([scannerPos.coords.longitude, scannerPos.coords.latitude])
+                            .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(`
                                 <div class="popup-headline">Your Location (from Browser)</div>
                                 <div class="popup-content">
                                     Location: ${roundToFourDecimals(scannerPos.coords.latitude)}, ${roundToFourDecimals(scannerPos.coords.longitude)}
-                                </div>
-                            `);
-                        markers.push(scannerMarker);
-                        group.push(scannerMarker);
+                                </div>`))
+                            .addTo(map);
+                        markers.push(sm);
+                        b.extend([scannerPos.coords.longitude, scannerPos.coords.latitude]);
                     }
-                    if (data.device_lat && data.device_lng) {
-                        group.push(L.marker([data.device_lat, data.device_lng]));
-                    }
-                    map.fitBounds(L.featureGroup(group).getBounds());
+                    if (data.device_lat && data.device_lng) b.extend([data.device_lng, data.device_lat]);
+                    map.fitBounds(b, { padding: 60, maxZoom: 15, duration: 0 });
                 }
             }
 
-            // Ask for the scanner's position; a denial or timeout still
-            // completes the challenge, just without location verification.
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
-                    function (pos) { scannerPos = pos; completeValidation(); },
-                    function () { completeValidation(); },
+                    (p) => { scannerPos = p; completeValidation(); },
+                    () => { completeValidation(); },
                     { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 }
                 );
             } else {
@@ -437,75 +258,52 @@
         })();
         {% endif %}
 
-        // Hide the overlay after 5 seconds or on user interaction (click or keypress)
-        var overlay = document.getElementById('status-overlay');
-        if (overlay) {
-            // Function to hide the overlay
-            function hideOverlay() {
-                overlay.style.display = 'none';
-            }
+        // Hide the overlay after 10 seconds or on user interaction.
+        (function () {
+            const overlay = document.getElementById('status-overlay');
+            if (!overlay) return;
+            const hide = () => { overlay.style.display = 'none'; };
+            setTimeout(hide, 10000);
+            overlay.addEventListener('click', hide);
+            document.addEventListener('keydown', hide);
+        })();
 
-            // Hide after 5 seconds
-            setTimeout(hideOverlay, 10000);
-
-            // Hide on click (anywhere on the overlay)
-            overlay.addEventListener('click', hideOverlay);
-
-            // Hide on keypress (any key)
-            document.addEventListener('keydown', hideOverlay);
-        }
-
-
-        // Handle right-click/long-tap event
-        // Handle right-click/long-tap event
-        map.on('contextmenu', function (e) {
-            // Check if the user is logged in
-            fetch('/check-login')
-                .then(response => response.json())
-                .then(data => {
-                    if (!data.logged_in) {
-                        alert('You must be logged in to add a device.');
-                        return;
-                    }
-
-                    // Generate random device_id
-                    const device_id = generateRandomString(4);
-
-                    // Create a popup with a form. The device is identified by
-                    // its ECDSA P-256 public key; the private key stays on the
-                    // device (ATECC slot 0 or secrets.h) and is never uploaded.
-                    const popup = L.popup()
-                        .setLatLng(e.latlng)
-                        .setContent(`
-                        <div class="popup-headline">Register Device</div>
-                            <div class="popup-content">
-                                Device ID:
-                                <input type="text" value="${device_id}" readonly>
-                                <br>Max. Validations:
-                                <input type="number" id="max_validations" min="1" value="1" required>
-                                <br>Public key (PEM):
-                                <br><textarea id="reg-pubkey" rows="4" style="width: 100%;" placeholder="-----BEGIN PUBLIC KEY-----&#10;from hw_probe + 'python_generator_v2.py pem', or generate below"></textarea>
-                                <br><button onclick="generateBrowserKeypair()">Generate keypair in browser</button>
-                                <div id="reg-privkey-box" style="display: none;">
-                                    <strong>Private key — copy it now, it is not stored anywhere:</strong>
-                                    <br><textarea id="reg-privkey" rows="5" readonly style="width: 100%;" onclick="this.select()"></textarea>
-                                </div>
-                                <br><button onclick="registerDevice(${e.latlng.lat}, ${e.latlng.lng}, '${device_id}', this)">Register Device</button>
-                            </div>
-                        `)
-                        .openOn(map);
-                });
+        // Right-click / long-tap to register a new device (login required).
+        map.on('contextmenu', (e) => {
+            {% if not current_user.is_authenticated %}
+            alert('You must be logged in to add a device.');
+            return;
+            {% endif %}
+            const deviceId = generateRandomString(4);
+            const lat = e.lngLat.lat, lng = e.lngLat.lng;
+            const popup = new maplibregl.Popup({ maxWidth: '360px' })
+                .setLngLat(e.lngLat)
+                .setHTML(`
+                    <div class="popup-headline">Register Device</div>
+                    <div class="popup-content register-form">
+                        <label>Device ID<input type="text" id="reg-device-id" value="${deviceId}" readonly></label>
+                        <label>Name (optional)<input type="text" id="reg-name" maxlength="80" placeholder="e.g. Front door"></label>
+                        <label>Description (optional)<input type="text" id="reg-description" maxlength="200"></label>
+                        <label>Max validations / cycle<input type="number" id="reg-max-validations" min="1" value="1" required></label>
+                        <label>Public key (PEM)
+                            <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;from hw_probe + 'python_generator_v2.py pem', or generate below"></textarea>
+                        </label>
+                        <button type="button" onclick="generateBrowserKeypair()">Generate keypair in browser</button>
+                        <div id="reg-privkey-box" style="display:none;">
+                            <strong>Private key — copy it now, it is not stored anywhere:</strong>
+                            <textarea id="reg-privkey" rows="5" readonly onclick="this.select()"></textarea>
+                        </div>
+                        <button type="button" onclick="registerDevice(${lat}, ${lng}, '${deviceId}', this)">Register Device</button>
+                    </div>
+                `)
+                .addTo(map);
         });
 
-        // PEM-encode a DER buffer from WebCrypto exportKey
         function pemEncode(buffer, label) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
             return `-----BEGIN ${label}-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END ${label}-----`;
         }
 
-        // Generate a P-256 keypair in the browser (for simulators / devices
-        // without a secure element). Only the public key is sent to the
-        // server; the private key is shown once for the user to keep.
         async function generateBrowserKeypair() {
             const keys = await crypto.subtle.generateKey(
                 { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
@@ -515,71 +313,48 @@
             document.getElementById('reg-privkey').value = pemEncode(priv, 'PRIVATE KEY');
             document.getElementById('reg-privkey-box').style.display = 'block';
         }
-        // Function to register the device
-        function registerDevice(lat, lng, device_id, button) {
-            let max_validations = document.getElementById('max_validations').value;
+
+        function registerDevice(lat, lng, deviceId, button) {
+            let maxV = parseInt(document.getElementById('reg-max-validations').value, 10);
+            if (isNaN(maxV) || maxV < 1) maxV = 1;
             const pubkey = document.getElementById('reg-pubkey').value.trim();
-
-            if (!pubkey) {
-                alert('Paste the device public key or generate a keypair first.');
-                return;
-            }
-
-            // Validate max_validations
-            max_validations = parseInt(max_validations, 10);
-            if (isNaN(max_validations) || max_validations < 1) {
-                max_validations = 1; // Default to 1 if invalid
-            }
-
-            // Disable the button to prevent multiple clicks
+            const name = document.getElementById('reg-name').value.trim();
+            const description = document.getElementById('reg-description').value.trim();
+            if (!pubkey) { alert('Paste the device public key or generate a keypair first.'); return; }
             button.disabled = true;
-            button.textContent = 'Registering...';
-
-            // Send data to the backend
+            button.textContent = 'Registering…';
             fetch('/add-device', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    device_id: device_id,
-                    pubkey: pubkey,
-                    lat: lat,
-                    lng: lng,
-                    max_validations: max_validations
-                }),
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ device_id: deviceId, pubkey, lat, lng, max_validations: maxV, name, description }),
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    //alert('Device registered successfully!\nValidate once to add it to the map.');
-                    
-                    // Add a marker for the new device
-                    map.closePopup();
-                    marker = L.marker([lat, lng], { opacity: 0.5 })  // Set opacity to 0.5
-                        .addTo(map)
-                        .bindPopup(`<div class="popup-content">Device ID: ${device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`)
-                        .openPopup();
-                    // Close the popup
-                    registeredDeviceMarkers.push(marker)
-                    
+                    // Close popup by clearing the DOM element it lives in.
+                    document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+                    const el = document.createElement('div');
+                    el.className = 'maplibregl-marker-default inactive';
+                    const marker = new maplibregl.Marker({ element: el })
+                        .setLngLat([lng, lat])
+                        .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
+                            `<div class="popup-content">Device ID: ${deviceId}<br><hr><strong>Validate once to add it to the map.</strong></div>`))
+                        .addTo(map);
+                    registeredMarkers.push(marker);
                 } else {
                     if (data.message === 'Device ID already exists. Please try again.') {
-                        // Regenerate device_id and update the form
-                        const new_device_id = generateRandomString(4);
-                        document.querySelector('.popup-form input[type="text"]').value = new_device_id;
+                        const newId = generateRandomString(4);
+                        document.getElementById('reg-device-id').value = newId;
                         alert('Device ID already exists.\nA new one has been generated.');
                     } else {
                         alert('Failed to register device: ' + data.message);
                     }
-                    // Re-enable the button
                     button.disabled = false;
                     button.textContent = 'Register Device';
                 }
             })
-            .catch(error => {
-                alert('An error occurred: ' + error.message);
-                // Re-enable the button
+            .catch(err => {
+                alert('An error occurred: ' + err.message);
                 button.disabled = false;
                 button.textContent = 'Register Device';
             });
