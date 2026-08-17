@@ -6,6 +6,7 @@
 #include <Wire.h>
 #include <Preferences.h>
 #include <Fonts/FreeSansBold9pt7b.h>
+#include <ArduinoECCX08.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/base64.h>
@@ -55,6 +56,11 @@ void displayErrorMessage(const char *text);
 unsigned long setupStartTime = millis();
 const unsigned long timeoutDuration = 10 * 60 * 1000; // 10 minutes
 
+// ATECC608 secure element (I2C 0x60). When present and locked, slot 0
+// signs and the private key never exists outside the chip. Without it,
+// signing falls back to the software key in secrets.h.
+bool useAtecc = false;
+
 // mbedtls RNG callback backed by the ESP32 hardware RNG
 static int espRng(void *ctx, unsigned char *buf, size_t len) {
   esp_fill_random(buf, len);
@@ -83,8 +89,9 @@ bool derToRawSignature(const uint8_t *der, size_t derLen, uint8_t raw[64]) {
   return true;
 }
 
-// Sign message with the device's ECDSA P-256 key. Writes raw r||s (64
-// bytes) into sig. Returns true on success.
+// Sign message with the device's ECDSA P-256 key — in the ATECC608 if
+// present, else in software with the key from secrets.h. Writes raw
+// r||s (64 bytes) into sig. Returns true on success.
 bool signMessage(const uint8_t *msg, size_t msgLen, uint8_t sig[64]) {
   uint8_t hash[32];
 #if MBEDTLS_VERSION_MAJOR >= 3
@@ -93,6 +100,17 @@ bool signMessage(const uint8_t *msg, size_t msgLen, uint8_t sig[64]) {
   mbedtls_sha256_ret(msg, msgLen, hash, 0);
 #endif
 
+  if (useAtecc) {
+    // ecSign returns raw r||s directly
+    if (ECCX08.ecSign(0, hash, sig)) return true;
+    Serial.println("ATECC signing failed");
+    return false;
+  }
+
+#ifndef DEVICE_PRIVATE_KEY_PEM
+  Serial.println("No ATECC and no software key configured");
+  return false;
+#else
   mbedtls_pk_context pk;
   mbedtls_pk_init(&pk);
 #if MBEDTLS_VERSION_MAJOR >= 3
@@ -124,6 +142,7 @@ bool signMessage(const uint8_t *msg, size_t msgLen, uint8_t sig[64]) {
   }
 
   return derToRawSignature(der, derLen, sig);
+#endif // DEVICE_PRIVATE_KEY_PEM
 }
 
 // URL-safe base64 (padding kept, as the server's urlsafe_b64decode expects)
@@ -158,6 +177,12 @@ void setup() {
     displayErrorMessage("RTC not found. Halting.");
     while (1); // Halt if RTC is not found
   }
+
+  // Detect the ATECC608 secure element (must be locked with a key in
+  // slot 0; see esp32/README.md)
+  useAtecc = ECCX08.begin() && ECCX08.locked();
+  Serial.println(useAtecc ? "Signer: ATECC608 slot 0"
+                          : "Signer: software key (no ATECC found)");
 
   // Check the reset reason
   esp_reset_reason_t resetReason = esp_reset_reason();

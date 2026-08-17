@@ -9,6 +9,11 @@ Usage:
                                            # public key PEM to register
     python python_generator_v2.py qr       # generate a signed QR code
     python python_generator_v2.py secrets  # print secrets.h for the ESP32
+    python python_generator_v2.py pem <xy-hex>
+                                            # convert an ATECC608 public key
+                                            # (64-byte X||Y hex, as printed by
+                                            # the hw_probe sketch) to the PEM
+                                            # registered on the server
 
 On the real device the same signature is produced by mbedtls (software)
 or an ATECC608 secure element (hardware), both of which speak ECDSA P-256.
@@ -67,6 +72,17 @@ def print_arduino_secrets(device_id):
         print(f'  "{line}\\n"{cont}')
 
 
+def pem_from_xy_hex(xy_hex):
+    """Convert an ATECC608 slot public key (64-byte X||Y hex) to PEM."""
+    xy = bytes.fromhex(xy_hex)
+    if len(xy) != 64:
+        raise SystemExit(f"Expected 64 bytes (128 hex chars), got {len(xy)}")
+    key = ECC.construct(curve='P-256',
+                        point_x=int.from_bytes(xy[:32], 'big'),
+                        point_y=int.from_bytes(xy[32:], 'big'))
+    print(key.export_key(format='PEM'))
+
+
 def sign_payload(private_key, device_id, ts, lat, lng):
     """Sign 'device_id|ts|lat|lng', return (payload_b64, sig_b64).
 
@@ -111,5 +127,9 @@ if __name__ == "__main__":
         generate_signed_qr(device_id, device_lat, device_lng)
     elif command == 'secrets':
         print_arduino_secrets(device_id)
+    elif command == 'pem':
+        if len(sys.argv) < 3:
+            raise SystemExit("Usage: python python_generator_v2.py pem <xy-hex>")
+        pem_from_xy_hex(sys.argv[2])
     else:
-        raise SystemExit(f"Unknown command '{command}' (use 'keygen', 'qr' or 'secrets')")
+        raise SystemExit(f"Unknown command '{command}' (use 'keygen', 'qr', 'secrets' or 'pem')")
