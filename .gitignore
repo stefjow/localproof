@@ -32,6 +32,7 @@ venv/
 
 # Ignore device private keys
 /esp32/keys/
+/esp32/secrets.h
 
 # Ignore adding devices with secrets
 /website/add_devices.py

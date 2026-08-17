@@ -6,27 +6,43 @@ This directory contains the code for ESP32 devices and Python-based simulators t
 
 ## Files
 
-- **`esp32_code.ino`**: Main ESP32 code for generating encrypted QR codes.
-- **`python_generator.py`**: Python script to simulate ESP32 behavior.
+- **`esp32_code.ino`**: Main ESP32 code. Signs `device_id|ts|lat|lng` with an ECDSA P-256 key (mbedtls) and displays the resulting `/v2/...` URL as a QR code.
+- **`secrets.h.example`**: Template for the device identity (`secrets.h` is gitignored).
+- **`python_generator_v2.py`**: Simulates the device — key generation and signed QR codes.
+- **`python_generator.py`**: Legacy v1 simulator (AES-encrypted TOTP codes).
 
 ---
 
-## ESP32 Setup
+## Provisioning a device
 
-1. Install the ESP32 development environment (Arduino IDE or PlatformIO).
-2. Open the `esp32_code.ino` in your IDE.
-3. Upload the code to your ESP32 device.
+1. Generate a keypair (once per device):
+   ```bash
+   python python_generator_v2.py keygen
+   ```
+   The private key is written to `keys/<device_id>_private.pem` (gitignored);
+   the public key PEM is printed — register it on the server for this device.
+
+2. Create the sketch's `secrets.h`:
+   ```bash
+   python python_generator_v2.py secrets > secrets.h
+   ```
+
+3. Open `esp32_code.ino` in Arduino IDE or PlatformIO and upload.
+
+The sketch targets Arduino-ESP32 core 3.x (mbedtls 3.x); core 2.x
+(mbedtls 2.28) is handled via `MBEDTLS_VERSION_MAJOR` guards.
 
 ---
 
 ## Simulator
 
-`python_generator.py` is a Python script to simulate ESP32 behavior. This script generates encrypted QR codes and tests the validation system.
+Generate a signed QR code without hardware (uses the same key as step 1):
 
-To run a simulator:
 ```bash
-python python_generator.py
+python python_generator_v2.py qr
 ```
+
+The QR image lands in `static/` and the validation URL is printed for testing.
 
 ---
 
