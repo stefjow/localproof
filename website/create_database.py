@@ -34,12 +34,33 @@ CREATE TABLE IF NOT EXISTS validation_logs (
 
 # Create a table for users
 cursor.execute('''
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL
 );
 ''')
+
+# Create a table for pending validation challenges (nonces).
+# A row is created when a QR URL is opened and consumed exactly once
+# when the browser completes the challenge via /validate/complete.
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS pending_validations (
+    nonce TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    data_enc TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0
+)
+''')
+
+# Add scanner location columns to validation_logs (no-op on fresh databases,
+# migrates existing ones)
+for column in ('scanner_lat REAL', 'scanner_lng REAL'):
+    try:
+        cursor.execute(f'ALTER TABLE validation_logs ADD COLUMN {column}')
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
 # Commit changes and close the connection
 conn.commit()

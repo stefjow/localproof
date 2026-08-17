@@ -7,17 +7,20 @@
     <link rel="stylesheet" href="/static/style.css">
     <style>
         .overlay-circle {
-            background: {% if success == 'true' %}rgba(0, 97, 100, 1){% else %}rgba(219, 67, 37, 1){% endif %};
+            background: {% if nonce %}rgba(100, 100, 100, 1){% elif success == 'true' %}rgba(0, 97, 100, 1){% else %}rgba(219, 67, 37, 1){% endif %};
         }
 
     </style>
 </head>
 <body>
-    {% if status %}
+    {% if status or nonce %}
     <div class="overlay" id="status-overlay">
-        <div class="overlay-circle">
+        <div class="overlay-circle" id="overlay-circle">
             <svg viewBox="0 0 100 100">
-                {% if success == 'true' %}
+                {% if nonce %}
+                <!-- Pending challenge -->
+                <text id="overlay-mark" x="50" y="55" text-anchor="middle" dominant-baseline="middle">?</text>
+                {% elif success == 'true' %}
                 <!-- Checkmark -->
                 <text x="50" y="60" text-anchor="middle" dominant-baseline="middle">✓</text>
                 {% else %}
@@ -26,7 +29,7 @@
                 {% endif %}
             </svg>
         </div>
-        <div class="overlay-status">{{ status }}</div>
+        <div class="overlay-status" id="overlay-status-text">{{ status or 'Verifying presence…' }}</div>
     </div>
     {% endif %}
     <div id="map"></div>
@@ -350,6 +353,89 @@
                 // If no markers exist, center the map on the world view
                 map.setView([0, 0], 3); // Center at [0, 0] with zoom level 2
             }
+        {% endif %}
+
+        // Challenge flow: answer the server's nonce with our geolocation,
+        // then render the validation result.
+        {% if nonce %}
+        (function () {
+            var scannerPos = null;
+
+            function completeValidation() {
+                var body = { nonce: '{{ nonce }}' };
+                if (scannerPos) {
+                    body.scanner_lat = scannerPos.coords.latitude;
+                    body.scanner_lng = scannerPos.coords.longitude;
+                }
+                fetch('/validate/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                })
+                .then(response => response.json())
+                .then(showResult)
+                .catch(() => showResult({ success: false, status: 'Validation Error' }));
+            }
+
+            function showResult(data) {
+                document.getElementById('overlay-circle').style.background =
+                    data.success ? 'rgba(0, 97, 100, 1)' : 'rgba(219, 67, 37, 1)';
+                document.getElementById('overlay-mark').textContent = data.success ? '✓' : '✗';
+                document.getElementById('overlay-status-text').textContent = data.status;
+
+                if (data.esp_lat && data.esp_lng) {
+                    var espMarker = L.marker([data.esp_lat, data.esp_lng], {
+                        icon: L.divIcon({
+                            className: 'emoji-marker',
+                            html: '🛰️',
+                            iconSize: [32, 32]
+                        })
+                    }).addTo(map)
+                        .bindPopup(`
+                            <div class="popup-headline">Device Location (from ESP32 GPS)</div>
+                            <div class="popup-content">
+                                Location: ${roundToFourDecimals(data.esp_lat)}, ${roundToFourDecimals(data.esp_lng)}
+                            </div>
+                        `);
+                    markers.push(espMarker);
+
+                    var group = [espMarker];
+                    if (scannerPos) {
+                        var scannerMarker = L.marker([scannerPos.coords.latitude, scannerPos.coords.longitude], {
+                            icon: L.divIcon({
+                                className: 'emoji-marker',
+                                html: '📱',
+                                iconSize: [32, 32]
+                            })
+                        }).addTo(map)
+                            .bindPopup(`
+                                <div class="popup-headline">Your Location (from Browser)</div>
+                                <div class="popup-content">
+                                    Location: ${roundToFourDecimals(scannerPos.coords.latitude)}, ${roundToFourDecimals(scannerPos.coords.longitude)}
+                                </div>
+                            `);
+                        markers.push(scannerMarker);
+                        group.push(scannerMarker);
+                    }
+                    if (data.device_lat && data.device_lng) {
+                        group.push(L.marker([data.device_lat, data.device_lng]));
+                    }
+                    map.fitBounds(L.featureGroup(group).getBounds());
+                }
+            }
+
+            // Ask for the scanner's position; a denial or timeout still
+            // completes the challenge, just without location verification.
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    function (pos) { scannerPos = pos; completeValidation(); },
+                    function () { completeValidation(); },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 }
+                );
+            } else {
+                completeValidation();
+            }
+        })();
         {% endif %}
 
         // Hide the overlay after 5 seconds or on user interaction (click or keypress)

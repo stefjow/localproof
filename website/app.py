@@ -7,9 +7,15 @@ from Crypto.Util.Padding import pad, unpad
 import base64
 import datetime
 import bcrypt
+import secrets
+from math import radians, sin, cos, asin, sqrt
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Change this to a secure key
+
+# Nonce challenge settings
+NONCE_TTL_SECONDS = 15       # how long the browser has to answer the challenge
+MAX_SCANNER_DISTANCE_M = 500 # max allowed distance between scanner and device
 
 # Flask-Login setup
 login_manager = LoginManager()
@@ -36,6 +42,12 @@ def decrypt_totp(key, cipher_text):
     cipher = AES.new(key, AES.MODE_CBC, iv)
     plain_text = unpad(cipher.decrypt(ciphertext), AES.block_size)
     return plain_text.decode('utf-8')
+
+def haversine_m(lat1, lng1, lat2, lng2):
+    """Distance between two coordinates in meters."""
+    lat1, lng1, lat2, lng2 = map(radians, (lat1, lng1, lat2, lng2))
+    a = sin((lat2 - lat1) / 2) ** 2 + cos(lat1) * cos(lat2) * sin((lng2 - lng1) / 2) ** 2
+    return 6371000 * 2 * asin(sqrt(a))
 
 # Hash a password
 def hash_password(password):
@@ -115,12 +127,12 @@ def get_my_inactive_devices():
     return jsonify(devices_list)
 
 # Update validation logs to include username
-def log_validation(device_id, status, reason, lat=None, lng=None):
+def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None):
     username = current_user.username if current_user.is_authenticated else "unknown"
     conn = get_db_connection()
     conn.execute('''
-        INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username, scanner_lat, scanner_lng)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
         device_id,
@@ -129,7 +141,9 @@ def log_validation(device_id, status, reason, lat=None, lng=None):
         lat,
         lng,
         request.remote_addr,
-        username
+        username,
+        scanner_lat,
+        scanner_lng
     ))
     conn.commit()
     conn.close()
@@ -163,33 +177,91 @@ def show_map():
 
 @app.route('/<device_id>/<data_enc>', methods=['GET'])
 def validate_totp(device_id, data_enc):
+    """
+    Step 1 of the challenge flow: opening the QR URL does NOT validate yet.
+    The server issues a one-time nonce and renders the map in a pending
+    state. The browser must answer via POST /validate/complete within
+    NONCE_TTL_SECONDS, sending the nonce and (if permitted) its geolocation.
+    """
     conn = get_db_connection()
     devices = conn.execute('''
-        SELECT * 
-        FROM devices 
-        WHERE active = TRUE 
+        SELECT *
+        FROM devices
+        WHERE active = TRUE
         OR device_id = ?
     ''', (device_id,)).fetchall()
     device = conn.execute('SELECT * FROM devices WHERE device_id = ?', (device_id,)).fetchone()
-    conn.close()
 
     if not device:
+        conn.close()
         log_validation(device_id, "failed", "Invalid Device ID")
         return render_template('map.html', devices=devices, status="Invalid Device ID", success="false")
 
+    nonce = secrets.token_urlsafe(16)
+    conn.execute(
+        'INSERT INTO pending_validations (nonce, device_id, data_enc, created_at) VALUES (?, ?, ?, ?)',
+        (nonce, device_id, data_enc, datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+    )
+    conn.commit()
+    conn.close()
+
+    return render_template('map.html', devices=devices, nonce=nonce)
+
+@app.route('/validate/complete', methods=['POST'])
+def complete_validation():
+    """
+    Step 2 of the challenge flow: consume the nonce and run the actual
+    validation (decrypt, TOTP, max_validations, scanner location check).
+    """
+    data = request.get_json(silent=True) or {}
+    nonce = data.get('nonce')
+    scanner_lat = data.get('scanner_lat')
+    scanner_lng = data.get('scanner_lng')
+
+    if not nonce:
+        return jsonify({'success': False, 'status': 'Missing Challenge'}), 400
+
+    conn = get_db_connection()
+
+    # Consume the nonce atomically: only one request can ever flip used 0 -> 1,
+    # so a relayed/replayed completion loses the race.
+    consumed = conn.execute(
+        'UPDATE pending_validations SET used = 1 WHERE nonce = ? AND used = 0',
+        (nonce,)
+    )
+    conn.commit()
+    if consumed.rowcount == 0:
+        conn.close()
+        return jsonify({'success': False, 'status': 'Invalid or Reused Challenge'})
+
+    pending = conn.execute('SELECT * FROM pending_validations WHERE nonce = ?', (nonce,)).fetchone()
+    device = conn.execute('SELECT * FROM devices WHERE device_id = ?', (pending['device_id'],)).fetchone()
+    conn.close()
+
+    device_id = pending['device_id']
+
+    issued_at = datetime.datetime.strptime(pending['created_at'], '%Y-%m-%d %H:%M:%S')
+    if (datetime.datetime.utcnow() - issued_at).total_seconds() > NONCE_TTL_SECONDS:
+        log_validation(device_id, "failed", "Challenge Expired", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
+        return jsonify({'success': False, 'status': 'Challenge Expired'})
+
+    if not device:
+        log_validation(device_id, "failed", "Invalid Device ID")
+        return jsonify({'success': False, 'status': 'Invalid Device ID'})
+
     try:
-        decrypted_data = decrypt_totp(device['secret'], data_enc)
-    except:
-        log_validation(device_id, "failed", "Decryption Error")
-        return render_template('map.html', devices=devices, status="Invalid Data Encryption", success="false")
+        decrypted_data = decrypt_totp(device['secret'], pending['data_enc'])
+    except Exception:
+        log_validation(device_id, "failed", "Decryption Error", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
+        return jsonify({'success': False, 'status': 'Invalid Data Encryption'})
 
     try:
         totp_number, esp_lat, esp_lng = decrypted_data.split('|')
         esp_lat = float(esp_lat)
         esp_lng = float(esp_lng)
     except (ValueError, IndexError):
-        log_validation(device_id, "failed", "Invalid Data Format")
-        return render_template('map.html', devices=devices, status="Invalid Decrypted Data Format", success="false")
+        log_validation(device_id, "failed", "Invalid Data Format", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
+        return jsonify({'success': False, 'status': 'Invalid Decrypted Data Format'})
 
     # Get the current TOTP cycle start time
     totp = pyotp.TOTP(device['secret'])
@@ -198,49 +270,52 @@ def validate_totp(device_id, data_enc):
     cycle_start = current_time.timestamp() - (current_time.timestamp() % time_step)
     cycle_start_str = datetime.datetime.utcfromtimestamp(cycle_start).strftime('%Y-%m-%d %H:%M:%S')
 
-    # Verify the TOTP
-    if totp.verify(totp_number):
-        # Check the number of validations in the current cycle
-        conn = get_db_connection()
-        validations_in_cycle = conn.execute(
-            'SELECT COUNT(*) FROM validation_logs WHERE device_id = ? AND timestamp >= ? AND status = "success"',
-            (device_id, cycle_start_str)
-        ).fetchone()[0]
+    # valid_window=1 tolerates the challenge round trip crossing a cycle boundary
+    if not totp.verify(totp_number, valid_window=1):
+        log_validation(device_id, "failed", "Invalid TOTP", esp_lat, esp_lng, scanner_lat, scanner_lng)
+        return jsonify({'success': False, 'status': 'Invalid Link'})
 
-        # Check if the device has exceeded max_validations
-        if validations_in_cycle >= device['max_validations']:
-            log_validation(device_id, "failed", "Max Validations Exceeded", esp_lat, esp_lng)
-            status = "Max Validations Exceeded"
-            success = "false"
-        else:
-            # If max_validations is not exceeded, log the successful validation
-            log_validation(device_id, "success", "Valid TOTP", esp_lat, esp_lng)
-            
-            # Update the device to active in the devices table
-            conn.execute(
-                'UPDATE devices SET active = TRUE WHERE device_id = ?',
-                (device_id,)
-            )
-            conn.commit()
-            
-            status = "Valid Link"
-            success = "true"
+    # Cross-check the scanner's browser geolocation against the registered
+    # device location. No geolocation (denied/unavailable) downgrades the
+    # validation instead of failing it; a clear mismatch fails.
+    location_verified = False
+    if scanner_lat is not None and scanner_lng is not None \
+            and device['lat'] is not None and device['lng'] is not None:
+        distance_m = haversine_m(float(scanner_lat), float(scanner_lng), device['lat'], device['lng'])
+        if distance_m > MAX_SCANNER_DISTANCE_M:
+            log_validation(device_id, "failed", f"Location Mismatch ({int(distance_m)}m away)",
+                           esp_lat, esp_lng, scanner_lat, scanner_lng)
+            return jsonify({'success': False, 'status': 'Location Mismatch'})
+        location_verified = True
+
+    conn = get_db_connection()
+    validations_in_cycle = conn.execute(
+        'SELECT COUNT(*) FROM validation_logs WHERE device_id = ? AND timestamp >= ? AND status = "success"',
+        (device_id, cycle_start_str)
+    ).fetchone()[0]
+
+    if validations_in_cycle >= device['max_validations']:
         conn.close()
-    else:
-        # If TOTP verification fails, log the failed validation
-        log_validation(device_id, "failed", "Invalid TOTP", esp_lat, esp_lng)
-        status = "Invalid Link"
-        success = "false"
+        log_validation(device_id, "failed", "Max Validations Exceeded", esp_lat, esp_lng, scanner_lat, scanner_lng)
+        return jsonify({'success': False, 'status': 'Max Validations Exceeded'})
 
-    return render_template('map.html',
-                         status=status,
-                         success=success,
-                         device_id=device_id,
-                         esp_lat=esp_lat,
-                         esp_lng=esp_lng,
-                         device_lat=device['lat'],
-                         device_lng=device['lng'],
-                         devices=devices)
+    reason = "Valid TOTP" if location_verified else "Valid TOTP (location unverified)"
+    log_validation(device_id, "success", reason, esp_lat, esp_lng, scanner_lat, scanner_lng)
+
+    conn.execute('UPDATE devices SET active = TRUE WHERE device_id = ?', (device_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'status': 'Valid Link' if location_verified else 'Valid Link (location unverified)',
+        'device_id': device_id,
+        'esp_lat': esp_lat,
+        'esp_lng': esp_lng,
+        'device_lat': device['lat'],
+        'device_lng': device['lng'],
+        'location_verified': location_verified
+    })
 
 @app.route('/add-device', methods=['POST'])
 @login_required  # Ensure the user is logged in
