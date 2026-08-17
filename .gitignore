@@ -30,5 +30,8 @@ venv/
 /esp32/static/*
 !/esp32/static/.gitkeep
 
+# Ignore device private keys
+/esp32/keys/
+
 # Ignore adding devices with secrets
 /website/add_devices.py

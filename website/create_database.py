@@ -50,15 +50,24 @@ CREATE TABLE IF NOT EXISTS pending_validations (
     device_id TEXT NOT NULL,
     data_enc TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    used INTEGER DEFAULT 0
+    used INTEGER DEFAULT 0,
+    scheme TEXT DEFAULT 'v1'
 )
 ''')
 
-# Add scanner location columns to validation_logs (no-op on fresh databases,
-# migrates existing ones)
-for column in ('scanner_lat REAL', 'scanner_lng REAL'):
+# Migrations (no-ops on fresh databases):
+# - scanner location and signed-code timestamp columns on validation_logs
+# - ECDSA public key (PEM) on devices for the v2 signature scheme
+# - scheme marker on pending_validations
+for table, column in (
+    ('validation_logs', 'scanner_lat REAL'),
+    ('validation_logs', 'scanner_lng REAL'),
+    ('validation_logs', 'code_ts INTEGER'),
+    ('devices', 'pubkey TEXT'),
+    ('pending_validations', "scheme TEXT DEFAULT 'v1'"),
+):
     try:
-        cursor.execute(f'ALTER TABLE validation_logs ADD COLUMN {column}')
+        cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column}')
     except sqlite3.OperationalError:
         pass  # column already exists
 
