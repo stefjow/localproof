@@ -16,6 +16,9 @@ venv/
 *.swp
 *.swo
 
+# Ignore test caches
+.pytest_cache/
+
 # Ignore log files and temporary files
 *.log
 *.tmp

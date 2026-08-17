@@ -14,6 +14,7 @@ pycparser==2.22
 pycrypto==2.6.1
 pycryptodome==3.22.0
 pyotp==2.8.0
+pytest==8.3.5
 pypng==0.20220715.0
 python-dotenv==1.0.0
 qrcode==7.4.2

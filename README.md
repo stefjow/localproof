@@ -86,6 +86,15 @@ localproof/
 
 4. Access the website at `http://localhost:5005`.
 
+### Running the tests
+
+End-to-end tests for the validation flow (QR scan → nonce challenge → TOTP,
+location and max-validation checks) live in `tests/`. From the repo root:
+
+```bash
+pytest
+```
+
 ---
 
 ## ESP32 Code
