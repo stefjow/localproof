@@ -2,7 +2,7 @@
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 #include <GxEPD2_BW.h>
-#include <QRCode_Library.h>
+#include "qrcodegen.h"  // vendored QR generator (ricmoo/QRCode, MIT)
 #include <Wire.h>
 #include <Preferences.h>
 #include <Fonts/FreeSansBold9pt7b.h>
