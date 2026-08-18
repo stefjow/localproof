@@ -342,6 +342,21 @@
                 .addTo(map);
             activeRegisterPopup = popup;
             popup.on('close', () => { if (activeRegisterPopup === popup) activeRegisterPopup = null; });
+
+            // Auto-close the ESP Web Tools install dialog when the flash
+            // finishes, so the user lands back in the register popup instead
+            // of the "Install localproof / Logs & Console" screen.
+            const installBtn = popup.getElement().querySelector('esp-web-install-button');
+            if (installBtn) {
+                installBtn.addEventListener('state-changed', (ev) => {
+                    const st = ev.detail && String(ev.detail.state || '').toUpperCase();
+                    if (st === 'FINISHED') {
+                        setTimeout(() => {
+                            document.querySelectorAll('ewt-install-dialog').forEach(d => d.remove());
+                        }, 300);
+                    }
+                });
+            }
         });
 
         function pemEncode(buffer, label) {
