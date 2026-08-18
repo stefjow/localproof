@@ -54,6 +54,11 @@
 
         <div id="add-device-drawer" class="register-form" hidden>
 
+          <div class="reg-unsupported" id="reg-unsupported" hidden>
+            Setting up a device needs a USB connection to the board, which only
+            Chrome or Edge on a desktop can open. Open this page there to add one.
+          </div>
+
           <div class="reg-section">
             <div class="reg-section-title">1 &middot; Connect the device</div>
             <div class="from-device-section">
@@ -526,6 +531,16 @@
         }
 
         // -- Add Device --------------------------------------------------------
+        // Registration talks to the board over WebSerial, which no mobile
+        // browser implements. Say so on arrival rather than letting someone
+        // work down the panel and hit a dead button.
+        (function flagSerialSupport() {
+            if (navigator.serial) return;
+            document.getElementById('reg-unsupported').hidden = false;
+            document.querySelector('#add-device-drawer .from-device-section')
+                .querySelectorAll('button').forEach(b => { b.disabled = true; });
+        })();
+
         // The device reports its own position over serial, so registration
         // needs no map interaction — just a clean form each time it opens.
         function resetAddDeviceForm() {

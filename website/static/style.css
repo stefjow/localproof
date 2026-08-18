@@ -20,13 +20,8 @@ body {
   background: var(--bg);
 }
 
-/* -- Page shell (inner pages) ------------------------------------------- */
-body.page { overflow-y: auto; }
-.page-main { max-width: 960px; margin: 0 auto; padding: 88px 20px 40px; }
-.inner h1 { margin: 0 0 20px; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
-.inner h2 { margin: 32px 0 12px; font-size: 18px; font-weight: 600; }
-.inner .hint { color: var(--text-muted); margin: 0 0 20px; }
-.inner .empty {
+/* -- Empty states (no devices yet, no validations yet) ------------------- */
+.empty {
   padding: 24px;
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -36,7 +31,10 @@ body.page { overflow-y: auto; }
 
 /* -- Map page ----------------------------------------------------------- */
 body.page-map { overflow: hidden; }
-#map { position: fixed; inset: 0; width: 100vw; height: 100vh; background: #000; }
+/* inset: 0 already sizes this. Do not add width/height: 100vw/vh — on mobile
+   100vh is the *large* viewport height, so the bottom would sit behind the
+   address bar, and 100vw ignores the scrollbar. */
+#map { position: fixed; inset: 0; background: #000; }
 body.page-map .maplibregl-canvas { outline: none; }
 
 /* -- Auth panel (top-right on every page) ------------------------------- */
@@ -121,15 +119,14 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .device-meta dt { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 .device-meta dd { margin: 2px 0 0; word-break: break-word; }
 .device-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; align-items: center; }
-.device-actions button,
-.device-actions .btn-link {
+.device-actions button {
   padding: 8px 12px; font-family: var(--font); font-size: 13px;
   background: rgba(255,255,255,0.08); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
-  text-decoration: none; min-height: 40px; display: inline-flex; align-items: center;
+  min-height: 40px; display: inline-flex; align-items: center;
 }
-.device-actions button:hover,
-.device-actions .btn-link:hover { background: rgba(255,255,255,0.14); }
+.device-actions button:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+.device-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
 .device-actions .danger { background: rgba(219, 67, 37, 0.15); border-color: rgba(219, 67, 37, 0.4); }
 .device-actions .danger:hover { background: rgba(219, 67, 37, 0.25); }
 
@@ -267,14 +264,28 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   letter-spacing: 0.04em; align-self: center;
 }
 
-@media (max-width: 620px) {
+@media (max-width: 640px) {
+  #side-rail { top: 8px; right: 8px; }
   #side-rail.authed { width: auto; }
-  #side-rail.expanded { left: 12px; }
+  #side-rail.expanded { left: 8px; bottom: 8px; }
   #side-rail.authed #user-info { flex-wrap: wrap; }
   #side-rail.authed .auth-nav { margin-left: 0; flex-wrap: wrap; }
+  #login-form, #user-info { min-width: 0; width: 100%; }
   .rail-content { padding: 12px; }
   .rail-content .device-meta { grid-template-columns: 1fr; }
   .rail-content .validations-table td { grid-template-columns: 100px 1fr; }
+  .overlay-circle { width: 200px; height: 200px; }
+  .overlay-status { font-size: 1.1rem; }
+
+  /* Under 16px, iOS Safari zooms the page in on focus and never zooms back. */
+  input, textarea, select { font-size: 16px; }
+}
+
+/* Touch targets: the nav links are ~17px tall for a mouse, which is fine,
+   but they wrap into stacked rows on a phone where that invites mis-taps. */
+@media (pointer: coarse) {
+  .auth-nav { gap: 2px 18px; }
+  .auth-nav a { min-height: 40px; display: inline-flex; align-items: center; }
 }
 /* -- Register form (inside the Add Device drawer) ------------------------ */
 .register-form { display: flex; flex-direction: column; gap: 18px; }
@@ -316,6 +327,13 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 .reg-status-row.done { color: var(--text); }
 .reg-status-row.done::before { content: "✓"; color: var(--accent); font-weight: 700; }
+
+.reg-unsupported {
+  padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.45;
+  color: var(--text); background: rgba(219, 67, 37, 0.12);
+  border: 1px solid rgba(219, 67, 37, 0.35);
+}
+.reg-unsupported[hidden] { display: none; }
 
 .reg-pem summary {
   font-size: 11px; color: var(--text-muted); cursor: pointer;
@@ -379,29 +397,3 @@ a { text-decoration: none; color: var(--accent); transition: color 0.2s ease; }
 a:hover { color: #7fd4d8; }
 
 /* -- Mobile pass -------------------------------------------------------- */
-@media (max-width: 640px) {
-  #auth-panel {
-    top: 8px; right: 8px; left: 8px; max-width: none;
-  }
-  #login-form, #user-info { min-width: 0; width: 100%; }
-  .auth-nav { gap: 4px 12px; }
-
-  .page-main { padding: 140px 14px 40px; }
-  .device-meta { grid-template-columns: 1fr; }
-
-  /* Tables reflow to stacked cards */
-  .validations-table thead { display: none; }
-  .validations-table, .validations-table tbody, .validations-table tr, .validations-table td { display: block; width: 100%; }
-  .validations-table tr {
-    background: var(--panel); border: 1px solid var(--panel-border);
-    border-radius: 10px; margin-bottom: 10px; padding: 4px 12px;
-  }
-  .validations-table td { border-bottom: 1px solid var(--border); padding: 8px 0; }
-  .validations-table tr td:last-child { border-bottom: none; }
-  .validations-table td::before {
-    content: attr(data-label); display: block;
-    font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;
-  }
-  .overlay-circle { width: 200px; height: 200px; }
-  .overlay-status { font-size: 1.1rem; }
-}
