@@ -350,21 +350,42 @@
             }
             button.disabled = true;
             button.textContent = 'Reading…';
-            info.textContent = 'Resetting device…';
+            info.textContent = 'Resetting device — if nothing appears in a few seconds, press RESET on the board.';
 
-            try { await port.setSignals({ requestToSend: true }); } catch (e) {}
-            await new Promise(r => setTimeout(r, 100));
-            try { await port.setSignals({ requestToSend: false }); } catch (e) {}
+            // Mimic esptool's default_reset: DTR low (GPIO0 released), RTS
+            // high pulls EN low for ~100 ms, then RTS low lets the chip
+            // boot. Chromium's WebSerial signal delivery is flaky on some
+            // USB-serial chips, so we pulse twice and rely on a physical
+            // reset as the documented fallback.
+            for (let i = 0; i < 2; i++) {
+                try { await port.setSignals({ dataTerminalReady: false, requestToSend: true }); } catch (e) {}
+                await new Promise(r => setTimeout(r, 120));
+                try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch (e) {}
+                await new Promise(r => setTimeout(r, 300));
+            }
 
             const decoder = new TextDecoderStream();
             const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
             const reader = decoder.readable.getReader();
 
-            const deadline = Date.now() + 180000;  // up to 3 min for a cold GPS fix
+            // Bounded read: Pubkey should arrive within a couple seconds of
+            // reset; if we don't see it soon, something's wrong and holding
+            // the port longer only makes the OS-side lock worse.
+            const overallDeadline = Date.now() + 30000;
+            let pubkeyDeadline = Date.now() + 30000;
             let buffer = '', gotPubkey = false, gotFix = false, deviceId = '';
             try {
-                while (Date.now() < deadline) {
-                    const { value, done } = await reader.read();
+                while (Date.now() < overallDeadline) {
+                    // Race the read against a short tick so we can re-check
+                    // deadlines even when the device is quiet.
+                    const readPromise = reader.read();
+                    const tick = new Promise(r => setTimeout(() => r({tick:true}), 500));
+                    const winner = await Promise.race([readPromise, tick]);
+                    if (winner.tick) {
+                        if (gotPubkey && Date.now() > pubkeyDeadline) break;
+                        continue;
+                    }
+                    const { value, done } = winner;
                     if (done) break;
                     buffer += value;
                     let idx;
@@ -378,7 +399,10 @@
                         } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
                             document.getElementById('reg-pubkey').value = await xyHexToPem(m[1]);
                             gotPubkey = true;
-                            info.textContent = `Device id: ${deviceId} — pubkey filled, waiting for GPS fix…`;
+                            // Give GPS a short window; a cold fix takes minutes,
+                            // so don't hold the port that long here.
+                            pubkeyDeadline = Date.now() + 8000;
+                            info.textContent = `Device id: ${deviceId} — pubkey filled, watching for GPS fix…`;
                         } else if ((m = line.match(/^GPS location acquired:\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)$/))) {
                             const dLat = parseFloat(m[1]), dLng = parseFloat(m[2]);
                             form.dataset.lat = dLat;
