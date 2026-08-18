@@ -166,13 +166,28 @@ def get_my_devices():
     """All devices owned by current_user. Excludes pubkey."""
     conn = get_db_connection()
     devices = conn.execute(
-        '''SELECT device_id, name, description, lat, lng, max_validations, active, timestamp
+        '''SELECT device_id, name, description, lat, lng, max_validations, active,
+                  username, timestamp
            FROM devices WHERE username = ?
            ORDER BY timestamp DESC''',
         (current_user.username,)
     ).fetchall()
     conn.close()
     return jsonify([dict(d) for d in devices])
+
+@app.route('/api/devices/<device_id>')
+def get_device(device_id):
+    """Public device metadata, for the history panel. Never exposes pubkey."""
+    conn = get_db_connection()
+    device = conn.execute(
+        '''SELECT device_id, name, description, lat, lng, active, username
+           FROM devices WHERE device_id = ?''',
+        (device_id,)
+    ).fetchone()
+    conn.close()
+    if not device:
+        return jsonify({'error': 'Device not found'}), 404
+    return jsonify(dict(device))
 
 @app.route('/api/my-validations')
 @login_required
@@ -534,19 +549,7 @@ def my_validations_page():
 
 @app.route('/devices/<device_id>/history', methods=['GET'])
 def device_history_page(device_id):
-    conn = get_db_connection()
-    device = conn.execute(
-        'SELECT device_id, name, description, lat, lng, active, username FROM devices WHERE device_id = ?',
-        (device_id,)
-    ).fetchone()
-    conn.close()
-    username = current_user.username if current_user.is_authenticated else "unknown"
-    return render_template(
-        'device_history.html',
-        device=dict(device) if device else None,
-        device_id=device_id,
-        username=username,
-    )
+    return redirect(url_for('show_map', history=device_id))
 
 @app.route('/delete-device/<device_id>', methods=['DELETE'])
 @login_required

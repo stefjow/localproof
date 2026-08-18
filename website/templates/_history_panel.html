@@ -1,0 +1,72 @@
+{# Full validation history for one device, including failed attempts.
+   Public: any device can be inspected from its map popup. #}
+<dl class="device-meta" id="history-meta"></dl>
+<div id="history-missing" class="empty" style="display:none;"></div>
+<table class="validations-table" id="history-table" style="display:none;">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Status</th>
+      <th>Reason</th>
+      <th>Scanner</th>
+    </tr>
+  </thead>
+  <tbody id="history-body"></tbody>
+</table>
+<div id="history-empty" class="empty" style="display:none;">No validation attempts recorded yet.</div>
+
+<script>
+async function loadHistory(deviceId) {
+  const meta = document.getElementById('history-meta');
+  const missing = document.getElementById('history-missing');
+  const tbl = document.getElementById('history-table');
+  const tbody = document.getElementById('history-body');
+  const empty = document.getElementById('history-empty');
+  meta.innerHTML = '';
+  tbody.innerHTML = '';
+  missing.style.display = 'none';
+  tbl.style.display = 'none';
+  empty.style.display = 'none';
+
+  const dr = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`);
+  if (!dr.ok) {
+    missing.textContent = `No device with id ${deviceId} exists.`;
+    missing.style.display = 'block';
+    return;
+  }
+  const d = await dr.json();
+  const rows = [
+    ['Device ID', d.device_id],
+    ['Description', d.description || '—'],
+    ['Location', (d.lat !== null && d.lng !== null)
+      ? `${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}` : '—'],
+    ['Owner', d.username],
+    ['Status', d.active ? 'Active' : 'Inactive'],
+  ];
+  for (const [label, value] of rows) {
+    const wrap = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    wrap.append(dt, dd);
+    meta.appendChild(wrap);
+  }
+  if (d.lat !== null && d.lng !== null) map.flyTo({ center: [d.lng, d.lat], zoom: 15 });
+
+  const logs = await (await fetch(`/validation-logs/${encodeURIComponent(deviceId)}`)).json();
+  if (!logs.length) { empty.style.display = 'block'; return; }
+  tbl.style.display = '';
+  for (const row of logs) {
+    const tr = document.createElement('tr');
+    tr.className = 'val-row ' + (row.status === 'success' ? 'ok' : 'bad');
+    tr.innerHTML = `
+      <td data-label="Time">${row.timestamp}</td>
+      <td data-label="Status"><span class="status-badge ${row.status}">${row.status}</span></td>
+      <td data-label="Reason">${row.reason || ''}</td>
+      <td data-label="Scanner">${row.username}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+</script>

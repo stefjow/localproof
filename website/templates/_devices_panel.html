@@ -22,7 +22,7 @@
       <button class="btn-show">Show on map</button>
       <button class="btn-edit">Edit</button>
       <button class="btn-toggle-active"></button>
-      <a class="btn-link" href="#">Full history →</a>
+      <button class="btn-history">Full history →</button>
       <button class="btn-delete danger">Delete</button>
     </div>
     <form class="device-edit-form" style="display:none;">
@@ -64,7 +64,7 @@ function renderCard(tpl, d) {
   const badge = node.querySelector('.device-active-badge');
   badge.textContent = d.active ? 'Active' : 'Inactive';
   badge.classList.add(d.active ? 'active' : 'inactive');
-  node.querySelector('.btn-link').href = `/devices/${encodeURIComponent(d.device_id)}/history`;
+  node.querySelector('.btn-history').addEventListener('click', () => openDeviceHistory(d.device_id));
   const showBtn = node.querySelector('.btn-show');
   showBtn.disabled = !hasPos;
   showBtn.addEventListener('click', () => showDeviceOnMap(d.lat, d.lng));

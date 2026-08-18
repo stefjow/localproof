@@ -228,6 +228,9 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 .rail-close:hover { color: var(--text); }
 .rail-content { padding: 16px; overflow-y: auto; flex: 1; min-height: 0; }
+/* The [hidden] attribute is only a UA rule, so any author display value on a
+   panel (e.g. .register-form's flex) would beat it and leave it stuck open. */
+.rail-content > [hidden] { display: none; }
 .rail-content .hint { color: var(--text-muted); margin: 0 0 14px; font-size: 13px; }
 .rail-content .device-card:last-child { margin-bottom: 0; }
 .rail-content .device-card { padding: 14px 16px; }

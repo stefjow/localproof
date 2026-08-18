@@ -1,5 +1,5 @@
 {# Auth panel: login form when logged out, user-info + nav when logged in.
-   Included by map.html and by _base.html (which wraps the inner pages). #}
+   The map is the only page, so this is its header inside #side-rail. #}
 <div id="auth-panel">
   {% if current_user.is_authenticated %}
     <div id="user-info">

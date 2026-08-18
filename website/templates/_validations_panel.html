@@ -34,7 +34,7 @@ async function loadValidations() {
     tr.className = 'val-row ' + (row.status === 'success' ? 'ok' : 'bad');
     tr.innerHTML = `
       <td data-label="Time">${row.timestamp}</td>
-      <td data-label="Device"><a href="/devices/${encodeURIComponent(row.device_id)}/history">${row.device_id}</a></td>
+      <td data-label="Device"><a href="#" onclick="openDeviceHistory('${row.device_id}'); return false;">${row.device_id}</a></td>
       <td data-label="Status"><span class="status-badge ${row.status}">${row.status}</span></td>
       <td data-label="Reason">${row.reason || ''}</td>
       <td data-label="Scanner location">${(row.scanner_lat !== null && row.scanner_lng !== null)

@@ -37,7 +37,6 @@
        it is just the auth card; expanded it becomes one full-height card. #}
     <div id="side-rail">
     {% include '_auth_panel.html' %}
-    {% if current_user.is_authenticated %}
     <div class="rail-body" id="rail-body" hidden>
       <div class="rail-head">
         <h2 id="rail-title"></h2>
@@ -45,6 +44,10 @@
       </div>
       <div class="rail-content">
 
+        {# Public: any device's history can be opened from its map popup. #}
+        <div id="history-drawer" hidden>{% include '_history_panel.html' %}</div>
+
+        {% if current_user.is_authenticated %}
         <div id="devices-drawer" hidden>{% include '_devices_panel.html' %}</div>
 
         <div id="validations-drawer" hidden>{% include '_validations_panel.html' %}</div>
@@ -88,10 +91,10 @@
             <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
           </div>
         </div>
+        {% endif %}
 
       </div>
     </div>
-    {% endif %}
     </div>
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
     <script>
@@ -199,61 +202,74 @@
         }
         loadInactiveDevices();
 
-        // Once a device flips to active (a successful scan came in), it
-        // drops off /api/my-inactive-devices; reload so the server-side
-        // Jinja loop renders the proper active marker for it.
+        // A device flips to active on its first successful scan, dropping off
+        // /api/my-inactive-devices. Swap its grey pin for a real one in place
+        // rather than reloading, which would close whatever panel is open.
         setInterval(async () => {
             if (inactiveIds.size === 0) return;
             try {
-                const r = await fetch('/api/my-inactive-devices');
-                const devices = await r.json();
+                const devices = await (await fetch('/api/my-inactive-devices')).json();
                 const still = new Set(devices.map(d => d.device_id));
-                for (const id of inactiveIds) {
-                    if (!still.has(id)) { location.reload(); return; }
+                if ([...inactiveIds].some(id => !still.has(id))) {
+                    await refreshActiveMarkers();
+                    await loadInactiveDevices();
                 }
             } catch (e) {}
         }, 15000);
         {% endif %}
 
-        // Devices from the server (all currently active)
-        {% for device in devices %}
-        (function () {
-            const deviceId = {{ device.device_id|tojson }};
-            const lat = {{ device.lat }};
-            const lng = {{ device.lng }};
-            const name = {{ (device.name or '')|tojson }};
-            const owner = {{ device.username|tojson }};
-            const maxV = {{ device.max_validations }};
-            const currentUser = {{ username|tojson }};
+        const CURRENT_USER = {{ username|tojson }};
+
+        // Pin for an active device. Also used when a device becomes active
+        // during the session (activated in the panel, or validated for the
+        // first time), which the server-rendered loop below cannot cover.
+        function createActiveMarker(d) {
             const popup = new maplibregl.Popup({ offset: 14, maxWidth: '360px' }).setHTML('Loading…');
             const marker = new maplibregl.Marker()
-                .setLngLat([lng, lat])
+                .setLngLat([d.lng, d.lat])
                 .setPopup(popup)
                 .addTo(map);
-            if (currentUser === owner) myActiveMarkers[deviceId] = marker;
+            marker._device = d;
+            if (CURRENT_USER === d.username) myActiveMarkers[d.device_id] = marker;
             popup.on('open', async () => {
-                const logs = await fetchValidationLogs(deviceId);
-                const ownerLink = (currentUser === owner)
+                // Read through _device and the live marker position so an edit
+                // is reflected without rebuilding the marker.
+                const dev = marker._device;
+                const pos = marker.getLngLat();
+                const logs = await fetchValidationLogs(dev.device_id);
+                const ownerLink = (CURRENT_USER === dev.username)
                     ? `<a href="#" onclick="openDrawer('devices-drawer'); return false;">Edit / Manage →</a>` : '';
                 popup.setHTML(`
-                    <div class="popup-headline">${name || deviceId}</div>
+                    <div class="popup-headline">${dev.name || dev.device_id}</div>
                     <div class="popup-content">
-                        Device: ${deviceId}<br>
-                        Location: ${roundToFourDecimals(lat)}, ${roundToFourDecimals(lng)}<br>
-                        Max validations / cycle: ${maxV}
+                        Device: ${dev.device_id}<br>
+                        Location: ${roundToFourDecimals(pos.lat)}, ${roundToFourDecimals(pos.lng)}<br>
+                        Max validations / cycle: ${dev.max_validations}
                         <hr>
                         <strong>Successful validations:</strong>
                         <div class="popup-scroll">${renderValidationLogs(logs)}</div>
                         <div class="popup-links">
-                            <a href="/devices/${encodeURIComponent(deviceId)}/history">Full history →</a>
+                            <a href="#" onclick="openDeviceHistory('${dev.device_id}'); return false;">Full history →</a>
                             ${ownerLink}
                         </div>
                     </div>
                 `);
             });
             markers.push(marker);
-            bounds.extend([lng, lat]);
-        })();
+            return marker;
+        }
+
+        // Devices from the server (all currently active)
+        {% for device in devices %}
+        createActiveMarker({{ {
+            'device_id': device.device_id,
+            'lat': device.lat,
+            'lng': device.lng,
+            'name': device.name,
+            'username': device.username,
+            'max_validations': device.max_validations,
+        }|tojson }});
+        bounds.extend([{{ device.lng }}, {{ device.lat }}]);
         {% endfor %}
 
         {% if esp_lat and esp_lng %}
@@ -361,31 +377,33 @@
             document.addEventListener('keydown', hide);
         })();
 
-        {% if current_user.is_authenticated %}
-        // -- Drawers -----------------------------------------------------------
-        // The map is the app shell; every panel slides in over it rather than
-        // being its own page, so /my-devices and /my-validations redirect here
-        // with ?devices=1 / ?validations=1. Add Device is a drawer too: its
-        // flow flies the map to the device's GPS fix, which is worth watching.
-        // One panel is shown at a time inside the rail, with the nav staying
-        // visible above it so you can switch without closing. The rail never
-        // captures the map: x or Escape closes it, nothing else, so an
-        // in-flight serial read cannot be cancelled by a stray click.
+        // -- Rail panels -------------------------------------------------------
+        // The map is the app shell; every panel opens inside the right-hand
+        // rail rather than as its own page, so /my-devices, /my-validations
+        // and /devices/<id>/history redirect here with a query parameter.
+        // One panel shows at a time with the nav pinned above it, so you can
+        // switch without closing. The rail never captures the map: x or
+        // Escape closes it, nothing else, so an in-flight serial read cannot
+        // be cancelled by a stray click.
         const PANELS = {
+            // Public — reachable from any device's map popup.
+            'history-drawer':     { title: 'Device History', nav: null, load: () => {} },
+            {% if current_user.is_authenticated %}
             'devices-drawer':     { title: 'My Devices',     nav: 'nav-my-devices',     load: () => loadDevices() },
             'validations-drawer': { title: 'My Validations', nav: 'nav-my-validations', load: () => loadValidations() },
             'add-device-drawer':  { title: 'Add Device',     nav: 'nav-add-device',     load: () => resetAddDeviceForm() },
+            {% endif %}
         };
         const sideRail = document.getElementById('side-rail');
         let openPanelId = null;
 
-        function openDrawer(id) {
+        function openDrawer(id, title) {
             if (openPanelId && openPanelId !== id) teardownPanel(openPanelId);
             PANELS[id].load();
             for (const pid of Object.keys(PANELS)) {
                 document.getElementById(pid).hidden = pid !== id;
             }
-            document.getElementById('rail-title').textContent = PANELS[id].title;
+            document.getElementById('rail-title').textContent = title || PANELS[id].title;
             document.getElementById('rail-body').hidden = false;
             sideRail.classList.add('expanded');
             openPanelId = id;
@@ -412,10 +430,23 @@
 
         function syncNavState() {
             for (const [pid, cfg] of Object.entries(PANELS)) {
+                if (!cfg.nav) continue;
                 const el = document.getElementById(cfg.nav);
                 if (el) el.classList.toggle('active', pid === openPanelId);
             }
         }
+
+        // Opened from a map popup or a device card, so the title names it.
+        function openDeviceHistory(deviceId) {
+            openDrawer('history-drawer', `History · ${deviceId}`);
+            loadHistory(deviceId);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeAllOverlays();
+        });
+
+        {% if current_user.is_authenticated %}
 
         // Re-render the drawer list and resync the map after any device
         // mutation, so pins follow edits without a full page reload.
@@ -442,7 +473,7 @@
                 .addTo(map);
             pendingPin.on('dragend', () => {
                 const p = pendingPin.getLngLat();
-                const form = document.getElementById('add-device-form');
+                const form = document.getElementById('add-device-drawer');
                 form.dataset.lat = p.lat;
                 form.dataset.lng = p.lng;
                 updateRegisterState(form);
@@ -453,20 +484,28 @@
             if (pendingPin) { pendingPin.remove(); pendingPin = null; }
         }
 
-        // Active pins are server-rendered by the Jinja loop, so after an edit
-        // move (or drop) the ones we own rather than reloading the page. A
-        // device missing from /api/my-devices entirely has been deleted.
+        // Bring the owner's pins in line with the server: move or drop the
+        // ones already on the map, and add pins for devices that became
+        // active during this session (activated here, or validated for the
+        // first time) — the server-rendered loop only knew about the ones
+        // that were already active at page load.
         async function refreshActiveMarkers() {
             try {
-                const r = await fetch('/api/my-devices');
-                const byId = Object.fromEntries((await r.json()).map(d => [d.device_id, d]));
+                const mine = await (await fetch('/api/my-devices')).json();
+                const byId = Object.fromEntries(mine.map(d => [d.device_id, d]));
                 for (const [id, marker] of Object.entries(myActiveMarkers)) {
                     const d = byId[id];
                     if (!d || !d.active || d.lat == null || d.lng == null) {
                         marker.remove();
                         delete myActiveMarkers[id];
                     } else {
+                        marker._device = d;
                         marker.setLngLat([d.lng, d.lat]);
+                    }
+                }
+                for (const d of mine) {
+                    if (d.active && d.lat != null && d.lng != null && !myActiveMarkers[d.device_id]) {
+                        createActiveMarker(d);
                     }
                 }
             } catch (e) { console.error(e); }
@@ -476,7 +515,7 @@
         // The device reports its own position over serial, so registration
         // needs no map interaction — just a clean form each time it opens.
         function resetAddDeviceForm() {
-            const form = document.getElementById('add-device-form');
+            const form = document.getElementById('add-device-drawer');
             form.querySelectorAll('input').forEach(el => {
                 el.value = el.type === 'number' ? '1' : '';
             });
@@ -492,12 +531,8 @@
             updateRegisterState(form);
         }
 
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeAllOverlays();
-        });
-
-        // Nav links carry real hrefs so they still work from the inner pages;
-        // on the map we intercept them and open the overlay in place.
+        // Nav links keep real hrefs so they still work as plain navigation;
+        // here we intercept them and open the panel in place.
         const NAV_OVERLAYS = {
             'nav-add-device': () => openDrawer('add-device-drawer'),
             'nav-my-devices': () => openDrawer('devices-drawer'),
@@ -507,13 +542,6 @@
             const el = document.getElementById(navId);
             if (el) el.addEventListener('click', (e) => { e.preventDefault(); open(); });
         }
-
-        // Arriving from an inner page, or from the /my-devices redirect.
-        const params = new URLSearchParams(location.search);
-        if (params.get('add') === '1') openDrawer('add-device-drawer');
-        else if (params.get('devices') === '1') openDrawer('devices-drawer');
-        else if (params.get('validations') === '1') openDrawer('validations-drawer');
-        if (params.toString()) history.replaceState(null, '', location.pathname);
 
         // ESP Web Tools leaves its dialog open on the "Logs & Console" screen
         // after a successful flash (our firmware has no Improv Wi-Fi Serial,
@@ -551,6 +579,18 @@
             }, 500);
         }
         {% endif %}
+
+        // Deep links: /my-devices, /my-validations and /devices/<id>/history
+        // redirect here with a parameter, which opens the matching panel.
+        (function openPanelFromUrl() {
+            const params = new URLSearchParams(location.search);
+            const historyId = params.get('history');
+            if (historyId) openDeviceHistory(historyId);
+            else if (params.get('add') === '1') openDrawer('add-device-drawer');
+            else if (params.get('devices') === '1') openDrawer('devices-drawer');
+            else if (params.get('validations') === '1') openDrawer('validations-drawer');
+            if (params.toString()) history.replaceState(null, '', location.pathname);
+        })();
 
         function pemEncode(buffer, label) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
