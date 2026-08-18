@@ -33,6 +33,26 @@
     <div id="map"></div>
     {% include '_auth_panel.html' %}
     {% if current_user.is_authenticated %}
+    <div class="drawer-backdrop" id="devices-drawer" hidden>
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="devices-drawer-title">
+        <div class="drawer-head">
+          <h2 id="devices-drawer-title">My Devices</h2>
+          <button type="button" class="modal-close" onclick="closeDrawer('devices-drawer')" aria-label="Close">&times;</button>
+        </div>
+        <div class="drawer-body">{% include '_devices_panel.html' %}</div>
+      </aside>
+    </div>
+
+    <div class="drawer-backdrop" id="validations-drawer" hidden>
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="validations-drawer-title">
+        <div class="drawer-head">
+          <h2 id="validations-drawer-title">My Validations</h2>
+          <button type="button" class="modal-close" onclick="closeDrawer('validations-drawer')" aria-label="Close">&times;</button>
+        </div>
+        <div class="drawer-body">{% include '_validations_panel.html' %}</div>
+      </aside>
+    </div>
+
     <div class="modal-backdrop" id="add-device-modal" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="add-device-title">
         <div class="modal-head">
@@ -115,6 +135,9 @@
         map.on('style.load', () => { map.setProjection({ type: 'globe' }); });
 
         const markers = [];
+        // Active markers this user owns, keyed by device_id, so the My
+        // Devices drawer can move or remove them in place after an edit.
+        const myActiveMarkers = {};
         const bounds = new maplibregl.LngLatBounds();
 
         function roundToFourDecimals(num) { return Math.round(num * 10000) / 10000; }
@@ -215,10 +238,11 @@
                 .setLngLat([lng, lat])
                 .setPopup(popup)
                 .addTo(map);
+            if (currentUser === owner) myActiveMarkers[deviceId] = marker;
             popup.on('open', async () => {
                 const logs = await fetchValidationLogs(deviceId);
                 const ownerLink = (currentUser === owner)
-                    ? `<a href="/my-devices#device-${encodeURIComponent(deviceId)}">Edit / Manage →</a>` : '';
+                    ? `<a href="#" onclick="openDrawer('devices-drawer'); return false;">Edit / Manage →</a>` : '';
                 popup.setHTML(`
                     <div class="popup-headline">${name || deviceId}</div>
                     <div class="popup-content">
@@ -346,6 +370,65 @@
         })();
 
         {% if current_user.is_authenticated %}
+        // -- Drawers (My Devices / My Validations) ---------------------------
+        // The map is the app shell; these panels slide in over it rather than
+        // being separate pages, so /my-devices and /my-validations redirect
+        // here with ?devices=1 / ?validations=1.
+        const DRAWER_LOADERS = {
+            'devices-drawer': () => loadDevices(),
+            'validations-drawer': () => loadValidations(),
+        };
+
+        function openDrawer(id) {
+            closeAllOverlays();
+            document.getElementById(id).hidden = false;
+            const load = DRAWER_LOADERS[id];
+            if (load) load();
+        }
+        function closeDrawer(id) { document.getElementById(id).hidden = true; }
+
+        function closeAllOverlays() {
+            Object.keys(DRAWER_LOADERS).forEach(closeDrawer);
+            if (!addDeviceModal.hidden) closeAddDevice();
+        }
+
+        for (const id of Object.keys(DRAWER_LOADERS)) {
+            const el = document.getElementById(id);
+            el.addEventListener('click', (e) => { if (e.target === el) closeDrawer(id); });
+        }
+
+        // Re-render the drawer list and resync the map after any device
+        // mutation, so pins follow edits without a full page reload.
+        function afterDeviceChange() {
+            loadDevices();
+            refreshActiveMarkers();
+            loadInactiveDevices();
+        }
+
+        function showDeviceOnMap(lat, lng) {
+            closeDrawer('devices-drawer');
+            map.flyTo({ center: [lng, lat], zoom: 15 });
+        }
+
+        // Active pins are server-rendered by the Jinja loop, so after an edit
+        // move (or drop) the ones we own rather than reloading the page. A
+        // device missing from /api/my-devices entirely has been deleted.
+        async function refreshActiveMarkers() {
+            try {
+                const r = await fetch('/api/my-devices');
+                const byId = Object.fromEntries((await r.json()).map(d => [d.device_id, d]));
+                for (const [id, marker] of Object.entries(myActiveMarkers)) {
+                    const d = byId[id];
+                    if (!d || !d.active || d.lat == null || d.lng == null) {
+                        marker.remove();
+                        delete myActiveMarkers[id];
+                    } else {
+                        marker.setLngLat([d.lng, d.lat]);
+                    }
+                }
+            } catch (e) { console.error(e); }
+        }
+
         // -- Add Device modal ------------------------------------------------
         // The device reports its own position over serial, so registration
         // needs no map interaction at all — it lives in a modal opened from
@@ -374,21 +457,31 @@
             addDeviceModal.hidden = true;
         }
 
-        document.getElementById('nav-add-device').addEventListener('click', (e) => {
-            e.preventDefault();
-            openAddDevice();
-        });
         addDeviceModal.addEventListener('click', (e) => {
             if (e.target === addDeviceModal) closeAddDevice();
         });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !addDeviceModal.hidden) closeAddDevice();
+            if (e.key === 'Escape') closeAllOverlays();
         });
-        // Arriving from an inner page's "+ Add Device" link.
-        if (new URLSearchParams(location.search).get('add') === '1') {
-            openAddDevice();
-            history.replaceState(null, '', location.pathname);
+
+        // Nav links carry real hrefs so they still work from the inner pages;
+        // on the map we intercept them and open the overlay in place.
+        const NAV_OVERLAYS = {
+            'nav-add-device': openAddDevice,
+            'nav-my-devices': () => openDrawer('devices-drawer'),
+            'nav-my-validations': () => openDrawer('validations-drawer'),
+        };
+        for (const [navId, open] of Object.entries(NAV_OVERLAYS)) {
+            const el = document.getElementById(navId);
+            if (el) el.addEventListener('click', (e) => { e.preventDefault(); open(); });
         }
+
+        // Arriving from an inner page, or from the /my-devices redirect.
+        const params = new URLSearchParams(location.search);
+        if (params.get('add') === '1') openAddDevice();
+        else if (params.get('devices') === '1') openDrawer('devices-drawer');
+        else if (params.get('validations') === '1') openDrawer('validations-drawer');
+        if (params.toString()) history.replaceState(null, '', location.pathname);
 
         // ESP Web Tools leaves its dialog open on the "Logs & Console" screen
         // after a successful flash (our firmware has no Improv Wi-Fi Serial,

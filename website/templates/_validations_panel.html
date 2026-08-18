@@ -1,25 +1,22 @@
-{% extends '_base.html' %}
-{% block title %}LOCALPROOF: My Validations{% endblock %}
-{% block content %}
-<section class="inner">
-  <h1>My Validations</h1>
-  <p class="hint">Every QR you've scanned while logged in, newest first.</p>
-  <div id="validations-empty" class="empty" style="display:none;">
-    You haven't validated any devices yet. Scan a device QR to start.
-  </div>
-  <table class="validations-table" id="validations-table" style="display:none;">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Device</th>
-        <th>Status</th>
-        <th>Reason</th>
-        <th>Scanner location</th>
-      </tr>
-    </thead>
-    <tbody id="validations-body"></tbody>
-  </table>
-</section>
+{# Validation history, rendered client-side from /api/my-validations and
+   shown inside the map's right-hand drawer. loadValidations() is called by
+   the drawer opener, not on parse. #}
+<p class="hint">Every QR you've scanned while logged in, newest first.</p>
+<div id="validations-empty" class="empty" style="display:none;">
+  You haven't validated any devices yet. Scan a device QR to start.
+</div>
+<table class="validations-table" id="validations-table" style="display:none;">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Device</th>
+      <th>Status</th>
+      <th>Reason</th>
+      <th>Scanner location</th>
+    </tr>
+  </thead>
+  <tbody id="validations-body"></tbody>
+</table>
 
 <script>
 async function loadValidations() {
@@ -46,6 +43,4 @@ async function loadValidations() {
     tbody.appendChild(tr);
   }
 }
-loadValidations();
 </script>
-{% endblock %}

@@ -1,14 +1,10 @@
-{% extends '_base.html' %}
-{% block title %}LOCALPROOF: My Devices{% endblock %}
-{% block content %}
-<section class="inner">
-  <h1>My Devices</h1>
-  <div id="devices-empty" class="empty" style="display:none;">
-    You haven't registered any devices yet. Open the
-    <a href="/">map</a> and right-click a location to add one.
-  </div>
-  <div id="devices-list"></div>
-</section>
+{# Device management list. Rendered client-side from /api/my-devices and
+   shown inside the map's right-hand drawer. loadDevices() is called by the
+   drawer opener, not on parse. #}
+<div id="devices-empty" class="empty" style="display:none;">
+  You haven't registered any devices yet. Use <strong>+ Add Device</strong> to set one up.
+</div>
+<div id="devices-list"></div>
 
 <template id="device-card-template">
   <article class="device-card" data-device-id="">
@@ -23,6 +19,7 @@
       <div><dt>Max validations / code</dt><dd class="device-maxv"></dd></div>
     </dl>
     <div class="device-actions">
+      <button class="btn-show">Show on map</button>
       <button class="btn-edit">Edit</button>
       <button class="btn-toggle-active"></button>
       <a class="btn-link" href="#">Full history →</a>
@@ -51,11 +48,6 @@ async function loadDevices() {
   document.getElementById('devices-empty').style.display = devices.length ? 'none' : 'block';
   const tpl = document.getElementById('device-card-template');
   for (const d of devices) list.appendChild(renderCard(tpl, d));
-  // Scroll to hash-linked device if present
-  if (location.hash) {
-    const el = document.querySelector(location.hash);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
 }
 
 function renderCard(tpl, d) {
@@ -65,13 +57,17 @@ function renderCard(tpl, d) {
   node.querySelector('.device-name').textContent = d.name || d.device_id;
   node.querySelector('.device-id').textContent = d.device_id;
   node.querySelector('.device-description').textContent = d.description || '—';
+  const hasPos = d.lat !== null && d.lng !== null;
   node.querySelector('.device-latlng').textContent =
-    (d.lat !== null && d.lng !== null) ? `${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}` : '—';
+    hasPos ? `${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}` : '—';
   node.querySelector('.device-maxv').textContent = d.max_validations;
   const badge = node.querySelector('.device-active-badge');
   badge.textContent = d.active ? 'Active' : 'Inactive';
   badge.classList.add(d.active ? 'active' : 'inactive');
   node.querySelector('.btn-link').href = `/devices/${encodeURIComponent(d.device_id)}/history`;
+  const showBtn = node.querySelector('.btn-show');
+  showBtn.disabled = !hasPos;
+  showBtn.addEventListener('click', () => showDeviceOnMap(d.lat, d.lng));
   const toggleBtn = node.querySelector('.btn-toggle-active');
   toggleBtn.textContent = d.active ? 'Deactivate' : 'Activate';
   toggleBtn.addEventListener('click', () => setActive(d.device_id, !d.active));
@@ -109,7 +105,7 @@ async function submitEdit(e, deviceId) {
     body: JSON.stringify(body),
   });
   const data = await r.json();
-  if (data.success) loadDevices();
+  if (data.success) afterDeviceChange();
   else alert(data.message || 'Update failed');
 }
 
@@ -120,7 +116,7 @@ async function setActive(deviceId, active) {
     body: JSON.stringify({ active }),
   });
   const data = await r.json();
-  if (data.success) loadDevices();
+  if (data.success) afterDeviceChange();
   else alert(data.message || 'Update failed');
 }
 
@@ -128,10 +124,7 @@ async function deleteDevice(deviceId) {
   if (!confirm(`Delete device ${deviceId}? This cannot be undone.`)) return;
   const r = await fetch(`/delete-device/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
   const data = await r.json();
-  if (data.success) loadDevices();
+  if (data.success) afterDeviceChange();
   else alert(data.message || 'Delete failed');
 }
-
-loadDevices();
 </script>
-{% endblock %}

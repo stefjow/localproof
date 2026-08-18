@@ -204,6 +204,35 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   padding: 40px 16px; overflow-y: auto;
 }
 .modal-backdrop[hidden] { display: none; }
+
+/* -- Drawer (My Devices / My Validations) -------------------------------- */
+/* Lists you browse rather than tasks you complete, so they slide in from the
+   side and leave the map visible instead of covering it. */
+.drawer-backdrop {
+  position: fixed; inset: 0; z-index: 1090;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; justify-content: flex-end;
+}
+.drawer-backdrop[hidden] { display: none; }
+.drawer {
+  display: flex; flex-direction: column;
+  width: 100%; max-width: 620px; height: 100%;
+  background: var(--panel); border-left: 1px solid var(--panel-border);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
+}
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border); flex: none;
+}
+.drawer-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.drawer-body { padding: 20px; overflow-y: auto; flex: 1; }
+.drawer-body .hint { color: var(--text-muted); margin: 0 0 16px; font-size: 13px; }
+.drawer-body .device-card:last-child { margin-bottom: 0; }
+@media (max-width: 680px) {
+  .drawer { max-width: none; }
+  .drawer-body { padding: 14px; }
+  .device-meta { grid-template-columns: 1fr; }
+}
 .modal {
   width: 100%; max-width: 460px;
   background: var(--panel); border: 1px solid var(--panel-border);

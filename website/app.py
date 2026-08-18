@@ -519,15 +519,18 @@ def update_device(device_id):
     finally:
         conn.close()
 
+# Device management and validation history live in drawers on the map, which
+# is the app shell. These paths stay as stable entry points (bookmarks, links
+# from the device history page) and open the matching drawer on arrival.
 @app.route('/my-devices', methods=['GET'])
 @login_required
 def my_devices_page():
-    return render_template('my_devices.html', username=current_user.username)
+    return redirect(url_for('show_map', devices=1))
 
 @app.route('/my-validations', methods=['GET'])
 @login_required
 def my_validations_page():
-    return render_template('my_validations.html', username=current_user.username)
+    return redirect(url_for('show_map', validations=1))
 
 @app.route('/devices/<device_id>/history', methods=['GET'])
 def device_history_page(device_id):

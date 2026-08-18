@@ -6,14 +6,14 @@
       <div class="user-info-line">
         Logged in as <span class="user-name">{{ current_user.username }}</span>
       </div>
+      {# The map is the app shell: these open overlays on it. Real hrefs keep
+         them working from the inner pages (device history), where they
+         navigate to the map and it opens the overlay on arrival. #}
       <nav class="auth-nav">
-        <a href="/">Map</a>
-        <a href="/my-devices">My Devices</a>
-        <a href="/my-validations">My Validations</a>
+        <a id="nav-my-devices" href="/?devices=1">My Devices</a>
+        <a id="nav-my-validations" href="/?validations=1">My Validations</a>
         <a href="#" onclick="logout(); return false;">Logout</a>
       </nav>
-      {# On the map page JS intercepts this and opens the modal in place;
-         from the inner pages it navigates to the map, which opens it. #}
       <a class="auth-cta" id="nav-add-device" href="/?add=1">+ Add Device</a>
     </div>
   {% else %}
