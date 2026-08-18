@@ -358,33 +358,29 @@
                 });
             }
 
-            // Watch the DOM for the ewt-install-dialog appearing, then watch
-            // its shadow root for the completion text.
-            const bodyObserver = new MutationObserver(() => {
-                const dlg = document.querySelector('ewt-install-dialog');
-                if (!dlg || dlg._localproofHooked) return;
-                dlg._localproofHooked = true;
-                const root = dlg.shadowRoot;
-                if (!root) return;
-                const check = () => {
-                    const text = (root.textContent || '').toLowerCase();
-                    // Any of these fires at the very end of the flash for
-                    // firmware without Improv Wi-Fi Serial support (ours):
-                    // - "Hard resetting via RTS pin..." is the last esptool log
-                    // - "Improv initialization failed" is the post-flash probe result
-                    if (/installation complete|installed successfully|installation was successful|your device is ready|successfully installed|hard resetting via rts|improv initialization failed/.test(text)) {
-                        closeInstallDialog();
-                        inner.disconnect();
-                        bodyObserver.disconnect();
-                        return true;
+            // ESP Web Tools does its end-of-flash reporting via console.log
+            // ("Hard resetting via RTS pin...", "Improv initialization
+            // failed"), not by rendering into the shadow DOM — so wrap
+            // console.log briefly to catch those. Unwrap once the dialog
+            // has been closed to avoid leaking the patch.
+            const origLog = console.log;
+            let watching = true;
+            console.log = function (...args) {
+                try {
+                    if (watching) {
+                        const s = args.map(a => (typeof a === 'string' ? a : '')).join(' ');
+                        if (/hard resetting via rts|improv initialization failed|leaving\.\.\./i.test(s)) {
+                            watching = false;
+                            console.log = origLog;
+                            closeInstallDialog();
+                        }
                     }
-                    return false;
-                };
-                if (check()) return;
-                const inner = new MutationObserver(check);
-                inner.observe(root, { childList: true, subtree: true, characterData: true });
+                } catch (e) {}
+                return origLog.apply(console, args);
+            };
+            popup.on('close', () => {
+                if (watching) { watching = false; console.log = origLog; }
             });
-            bodyObserver.observe(document.body, { childList: true, subtree: true });
 
             function closeInstallDialog() {
                 setTimeout(() => {
