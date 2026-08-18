@@ -205,6 +205,12 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .from-device-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 .from-device-hint { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
 .from-device-info { font-size: 11px; color: var(--text-muted); min-height: 14px; }
+.from-device-info.action {
+  font-size: 13px; font-weight: 600; color: #000;
+  background: #ffd54a; padding: 6px 8px; border-radius: 6px;
+  animation: fromDevicePulse 1.4s ease-in-out infinite;
+}
+@keyframes fromDevicePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 esp-web-install-button { display: block; }
 
 /* Legacy popup table used by the map's per-marker log view */

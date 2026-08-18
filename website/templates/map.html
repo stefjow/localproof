@@ -413,7 +413,8 @@
                 if (err.name !== 'NotFoundError') alert('Could not open serial port: ' + err.message);
                 return;
             }
-            info.textContent = 'Press the RESET (or EN) button on the ESP32 board now to trigger fresh boot output.';
+            info.className = 'from-device-info action';
+            info.textContent = 'Press the RESET (or EN) button on the ESP32 board now.';
 
             // Deliberately not calling port.setSignals() to reset: on some
             // USB-serial chips (CP2102 in particular) Chromium's signal
@@ -462,6 +463,7 @@
                         let m;
                         if ((m = line.match(/^Device ID:\s*([0-9a-fA-F]{8})$/))) {
                             deviceId = m[1];
+                            info.className = 'from-device-info';
                             info.textContent = `Device id: ${deviceId} — waiting for pubkey…`;
                         } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
                             document.getElementById('reg-pubkey').value = await xyHexToPem(m[1]);
