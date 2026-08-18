@@ -368,24 +368,23 @@
             const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
             const reader = decoder.readable.getReader();
 
-            // Bounded read: Pubkey should arrive within a couple seconds of
-            // reset; if we don't see it soon, something's wrong and holding
-            // the port longer only makes the OS-side lock worse.
-            const overallDeadline = Date.now() + 30000;
-            let pubkeyDeadline = Date.now() + 30000;
+            // Bounded read via reader.cancel() timers — never race reader.read()
+            // itself, or the losing chunk is discarded when the port streams it.
             let buffer = '', gotPubkey = false, gotFix = false, deviceId = '';
+            let gpsSats = null, gpsInview = null;
+            const overallTimer = setTimeout(() => { reader.cancel().catch(() => {}); }, 30000);
+            let pubkeyTimer = null;
+            const renderInfo = () => {
+                if (!gotPubkey) return;
+                let s = `Device id: ${deviceId} — pubkey filled`;
+                if (gotFix) return;  // fix handler writes its own line with coords
+                if (gpsSats !== null) s += ` — GPS ${gpsSats} in fix / ${gpsInview} in view`;
+                else s += ' — watching for GPS fix…';
+                info.textContent = s;
+            };
             try {
-                while (Date.now() < overallDeadline) {
-                    // Race the read against a short tick so we can re-check
-                    // deadlines even when the device is quiet.
-                    const readPromise = reader.read();
-                    const tick = new Promise(r => setTimeout(() => r({tick:true}), 500));
-                    const winner = await Promise.race([readPromise, tick]);
-                    if (winner.tick) {
-                        if (gotPubkey && Date.now() > pubkeyDeadline) break;
-                        continue;
-                    }
-                    const { value, done } = winner;
+                while (true) {
+                    const { value, done } = await reader.read();
                     if (done) break;
                     buffer += value;
                     let idx;
@@ -399,10 +398,17 @@
                         } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
                             document.getElementById('reg-pubkey').value = await xyHexToPem(m[1]);
                             gotPubkey = true;
-                            // Give GPS a short window; a cold fix takes minutes,
-                            // so don't hold the port that long here.
-                            pubkeyDeadline = Date.now() + 8000;
-                            info.textContent = `Device id: ${deviceId} — pubkey filled, watching for GPS fix…`;
+                            renderInfo();
+                            // Long enough to catch at least one GPS diagnostic
+                            // line (fired every 10 s) so we can surface sat
+                            // counts, but not so long that we hold /dev/tty*
+                            // for a cold fix (which can take minutes).
+                            if (!pubkeyTimer) pubkeyTimer = setTimeout(
+                                () => { reader.cancel().catch(() => {}); }, 15000);
+                        } else if ((m = line.match(/^GPS:\s+chars=\d+\s+sats=(\d+)\s+hdop=[\d.]+\s+inview=(\d+)/))) {
+                            gpsSats = parseInt(m[1], 10);
+                            gpsInview = parseInt(m[2], 10);
+                            renderInfo();
                         } else if ((m = line.match(/^GPS location acquired:\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)$/))) {
                             const dLat = parseFloat(m[1]), dLng = parseFloat(m[2]);
                             form.dataset.lat = dLat;
@@ -414,6 +420,8 @@
                     if (gotPubkey && gotFix) break;
                 }
             } finally {
+                clearTimeout(overallTimer);
+                if (pubkeyTimer) clearTimeout(pubkeyTimer);
                 try { await reader.cancel(); } catch (e) {}
                 try { await readableClosed; } catch (e) {}
                 try { await port.close(); } catch (e) {}
@@ -421,9 +429,9 @@
             button.disabled = false;
             button.textContent = gotPubkey ? 'Read again' : 'Read from device';
             if (!gotPubkey) {
-                alert('Did not receive a Pubkey: line from the device. Make sure it is running current localproof firmware and try again.');
+                alert('No Pubkey: line arrived. Click Read again and press the RESET/EN button on the device once the port picker closes — that always triggers fresh boot output.');
             } else if (!gotFix) {
-                info.textContent += ' (still searching — read again once the fix lands to prefill coordinates)';
+                info.textContent += ' — no fix yet; click Read again once more satellites are in view.';
             }
         }
 
