@@ -200,13 +200,26 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   pointer-events: none;
 }
 #side-rail > * { pointer-events: auto; }
-#side-rail.expanded { width: 520px; bottom: 12px; }
+/* Width is fixed in both states so opening a panel only grows the card
+   downward — the nav is laid out horizontally to fill it. */
+#side-rail.authed { width: 520px; }
+#side-rail.expanded { bottom: 12px; }
 
 /* Inside the rail the auth panel is a header, not its own floating box. */
 #side-rail #auth-panel { position: static; max-width: none; flex: none; }
 #side-rail.expanded #user-info {
   border-radius: 8px 8px 0 0; border-bottom: none;
 }
+#side-rail.authed #user-info {
+  display: flex; align-items: center; gap: 14px; padding: 9px 14px;
+}
+#side-rail.authed .user-info-line {
+  margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#side-rail.authed .auth-nav {
+  margin-left: auto; flex-wrap: nowrap; gap: 14px; font-size: 12.5px;
+}
+#side-rail.authed .auth-nav a { padding: 2px 0; white-space: nowrap; }
 
 .rail-body {
   display: flex; flex-direction: column; min-height: 0; flex: 1;
@@ -255,7 +268,10 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 
 @media (max-width: 620px) {
-  #side-rail.expanded { width: auto; left: 12px; }
+  #side-rail.authed { width: auto; }
+  #side-rail.expanded { left: 12px; }
+  #side-rail.authed #user-info { flex-wrap: wrap; }
+  #side-rail.authed .auth-nav { margin-left: 0; flex-wrap: wrap; }
   .rail-content { padding: 12px; }
   .rail-content .device-meta { grid-template-columns: 1fr; }
   .rail-content .validations-table td { grid-template-columns: 100px 1fr; }

@@ -35,7 +35,7 @@
     {# One right-hand rail: the auth card is its header and the panels render
        directly below it, so nothing stacks on top of anything else. Collapsed
        it is just the auth card; expanded it becomes one full-height card. #}
-    <div id="side-rail">
+    <div id="side-rail" class="{% if current_user.is_authenticated %}authed{% endif %}">
     {% include '_auth_panel.html' %}
     <div class="rail-body" id="rail-body" hidden>
       <div class="rail-head">
@@ -134,6 +134,9 @@
         // Devices drawer can move or remove them in place after an edit.
         const myActiveMarkers = {};
         const bounds = new maplibregl.LngLatBounds();
+        // Set when a deep link already targets a specific device, so the
+        // arrival fit does not fight the flyTo that opened it.
+        let skipInitialFit = false;
 
         function roundToFourDecimals(num) { return Math.round(num * 10000) / 10000; }
 
@@ -290,10 +293,21 @@
             map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 0 });
         })();
         {% else %}
+        // Arrive on the registered devices rather than on the whole globe.
+        // maxZoom keeps a lone device from filling the screen at street level.
         map.on('load', () => {
-            if (!bounds.isEmpty()) {
-                map.fitBounds(bounds, { padding: 40, maxZoom: 6, duration: 0 });
-            }
+            if (bounds.isEmpty() || skipInitialFit) return;
+            const rail = document.getElementById('side-rail');
+            const railWidth = rail ? rail.getBoundingClientRect().width : 0;
+            map.fitBounds(bounds, {
+                // Keep the fitted area clear of the rail on wide screens.
+                padding: {
+                    top: 80, bottom: 80, left: 80,
+                    right: Math.min(railWidth + 40, window.innerWidth * 0.4),
+                },
+                maxZoom: 12,
+                duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1600,
+            });
         });
         {% endif %}
 
@@ -585,7 +599,7 @@
         (function openPanelFromUrl() {
             const params = new URLSearchParams(location.search);
             const historyId = params.get('history');
-            if (historyId) openDeviceHistory(historyId);
+            if (historyId) { skipInitialFit = true; openDeviceHistory(historyId); }
             else if (params.get('add') === '1') openDrawer('add-device-drawer');
             else if (params.get('devices') === '1') openDrawer('devices-drawer');
             else if (params.get('validations') === '1') openDrawer('validations-drawer');
