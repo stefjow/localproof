@@ -124,11 +124,22 @@
             sky: {}
         };
 
+        // Positions of the active devices, needed before the map exists so it
+        // can open on them. Animating there afterwards means either a linear
+        // easeTo (which zooms in somewhere wrong, then skims across at low
+        // altitude) or a globe-to-street flyTo — neither is worth watching on
+        // every page load.
+        const ACTIVE_DEVICES = [
+            {% for device in devices %}{% if device.active and device.lat is not none and device.lng is not none %}
+            [{{ device.lng }}, {{ device.lat }}],
+            {% endif %}{% endfor %}
+        ];
+
         const map = new maplibregl.Map({
             container: 'map',
             style: cartoDarkStyle,
-            center: [0, 20],
-            zoom: 1.2,
+            center: ACTIVE_DEVICES.length === 1 ? ACTIVE_DEVICES[0] : [0, 20],
+            zoom: ACTIVE_DEVICES.length === 1 ? 13 : 1.2,
             attributionControl: { compact: true },
         });
         map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
@@ -270,7 +281,7 @@
         // Devices from the server. Normally all active, but the QR-scan
         // render also includes the scanned device so it can be shown even
         // before its first validation — only active ones frame the map.
-        {% for device in devices %}
+        {% for device in devices %}{% if device.lat is not none and device.lng is not none %}
         createActiveMarker({{ {
             'device_id': device.device_id,
             'lat': device.lat,
@@ -280,6 +291,7 @@
             'max_validations': device.max_validations,
         }|tojson }});
         {% if device.active %}bounds.extend([{{ device.lng }}, {{ device.lat }}]);{% endif %}
+        {% endif %}
         {% endfor %}
 
         {% if esp_lat and esp_lng %}
@@ -302,17 +314,12 @@
         {% else %}
         // Arrive on the registered devices rather than on the whole globe.
         // maxZoom keeps a lone device from filling the screen at street level.
+        // One device is handled by the constructor above; several need the
+        // viewport to frame, so fit once the map has a size. No duration:
+        // the map should simply already be there when you arrive.
         map.on('load', () => {
-            if (bounds.isEmpty() || skipInitialFit) return;
-            const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1600;
-            const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
-            if (ne.lng === sw.lng && ne.lat === sw.lat) {
-                // A single device is a zero-area box: fitBounds would derive
-                // its centre from the padding, so set the camera outright.
-                map.easeTo({ center: ne, zoom: 13, duration });
-            } else {
-                map.fitBounds(bounds, { padding: 80, maxZoom: 13, duration });
-            }
+            if (skipInitialFit || ACTIVE_DEVICES.length < 2) return;
+            map.fitBounds(bounds, { padding: 80, maxZoom: 13, duration: 0 });
         });
         {% endif %}
 
