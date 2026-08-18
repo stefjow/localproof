@@ -366,14 +366,22 @@
                 dlg._localproofHooked = true;
                 const root = dlg.shadowRoot;
                 if (!root) return;
-                const inner = new MutationObserver(() => {
+                const check = () => {
                     const text = (root.textContent || '').toLowerCase();
-                    if (/installation complete|installed successfully|installation was successful|your device is ready|successfully installed/.test(text)) {
+                    // Any of these fires at the very end of the flash for
+                    // firmware without Improv Wi-Fi Serial support (ours):
+                    // - "Hard resetting via RTS pin..." is the last esptool log
+                    // - "Improv initialization failed" is the post-flash probe result
+                    if (/installation complete|installed successfully|installation was successful|your device is ready|successfully installed|hard resetting via rts|improv initialization failed/.test(text)) {
                         closeInstallDialog();
                         inner.disconnect();
                         bodyObserver.disconnect();
+                        return true;
                     }
-                });
+                    return false;
+                };
+                if (check()) return;
+                const inner = new MutationObserver(check);
                 inner.observe(root, { childList: true, subtree: true, characterData: true });
             });
             bodyObserver.observe(document.body, { childList: true, subtree: true });
