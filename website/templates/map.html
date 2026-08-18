@@ -65,7 +65,6 @@
         map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
         map.on('style.load', () => { map.setProjection({ type: 'globe' }); });
 
-        const registeredMarkers = [];
         const markers = [];
         const bounds = new maplibregl.LngLatBounds();
 
@@ -96,25 +95,60 @@
 
         {% if current_user.is_authenticated %}
         const inactiveMarkers = [];
+        const inactiveIds = new Set();
+
+        function addInactiveMarker(deviceId, lat, lng) {
+            const marker = new maplibregl.Marker({ color: '#888', draggable: true })
+                .setLngLat([lng, lat])
+                .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
+                    `<div class="popup-content">Device ID: ${deviceId}<br><hr><strong>Drag to correct location, then scan its QR to validate.</strong></div>`))
+                .addTo(map);
+            marker.getElement().style.opacity = '0.7';
+            marker.on('dragend', async () => {
+                const { lng: nlng, lat: nlat } = marker.getLngLat();
+                try {
+                    const r = await fetch(`/update-device/${encodeURIComponent(deviceId)}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lat: nlat, lng: nlng }),
+                    });
+                    const data = await r.json();
+                    if (!data.success) alert('Could not save new position: ' + data.message);
+                } catch (e) { alert('Could not save new position: ' + e.message); }
+            });
+            inactiveMarkers.push(marker);
+            inactiveIds.add(deviceId);
+        }
+
         async function loadInactiveDevices() {
             try {
                 const r = await fetch('/api/my-inactive-devices');
                 const devices = await r.json();
                 inactiveMarkers.forEach(m => m.remove());
                 inactiveMarkers.length = 0;
+                inactiveIds.clear();
                 for (const d of devices) {
                     if (d.lat == null || d.lng == null) continue;
-                    const marker = new maplibregl.Marker({ color: '#888' })
-                        .setLngLat([d.lng, d.lat])
-                        .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
-                            `<div class="popup-content">Device ID: ${d.device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`))
-                        .addTo(map);
-                    marker.getElement().style.opacity = '0.7';
-                    inactiveMarkers.push(marker);
+                    addInactiveMarker(d.device_id, d.lat, d.lng);
                 }
             } catch (e) { console.error(e); }
         }
         loadInactiveDevices();
+
+        // Once a device flips to active (a successful scan came in), it
+        // drops off /api/my-inactive-devices; reload so the server-side
+        // Jinja loop renders the proper active marker for it.
+        setInterval(async () => {
+            if (inactiveIds.size === 0) return;
+            try {
+                const r = await fetch('/api/my-inactive-devices');
+                const devices = await r.json();
+                const still = new Set(devices.map(d => d.device_id));
+                for (const id of inactiveIds) {
+                    if (!still.has(id)) { location.reload(); return; }
+                }
+            } catch (e) {}
+        }, 15000);
         {% endif %}
 
         // Devices from the server (all currently active)
@@ -461,13 +495,7 @@
                     const deviceId = data.device_id;
                     // Close popup by clearing the DOM element it lives in.
                     document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
-                    const marker = new maplibregl.Marker({ color: '#888' })
-                        .setLngLat([lng, lat])
-                        .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
-                            `<div class="popup-content">Device ID: ${deviceId}<br><hr><strong>Validate once to add it to the map.</strong></div>`))
-                        .addTo(map);
-                    marker.getElement().style.opacity = '0.7';
-                    registeredMarkers.push(marker);
+                    addInactiveMarker(deviceId, lat, lng);
                 } else {
                     alert('Failed to register device: ' + data.message);
                     button.disabled = false;
