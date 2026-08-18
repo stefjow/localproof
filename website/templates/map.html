@@ -104,13 +104,12 @@
                 inactiveMarkers.length = 0;
                 for (const d of devices) {
                     if (d.lat == null || d.lng == null) continue;
-                    const el = document.createElement('div');
-                    el.className = 'maplibregl-marker-default inactive';
-                    const marker = new maplibregl.Marker({ element: el })
+                    const marker = new maplibregl.Marker({ color: '#888' })
                         .setLngLat([d.lng, d.lat])
                         .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
                             `<div class="popup-content">Device ID: ${d.device_id}<br><hr><strong>Validate once to add it to the map.</strong></div>`))
                         .addTo(map);
+                    marker.getElement().style.opacity = '0.7';
                     inactiveMarkers.push(marker);
                 }
             } catch (e) { console.error(e); }
@@ -462,13 +461,12 @@
                     const deviceId = data.device_id;
                     // Close popup by clearing the DOM element it lives in.
                     document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
-                    const el = document.createElement('div');
-                    el.className = 'maplibregl-marker-default inactive';
-                    const marker = new maplibregl.Marker({ element: el })
+                    const marker = new maplibregl.Marker({ color: '#888' })
                         .setLngLat([lng, lat])
                         .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
                             `<div class="popup-content">Device ID: ${deviceId}<br><hr><strong>Validate once to add it to the map.</strong></div>`))
                         .addTo(map);
+                    marker.getElement().style.opacity = '0.7';
                     registeredMarkers.push(marker);
                 } else {
                     alert('Failed to register device: ' + data.message);
