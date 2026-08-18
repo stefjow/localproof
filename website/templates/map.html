@@ -325,14 +325,14 @@
                             <div id="reg-device-info" class="from-device-info"></div>
                         </div>
                         <label>Public key (PEM)
-                            <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;auto-filled from the device, or generate below"></textarea>
+                            <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;auto-filled from the device, or generate below" oninput="updateRegisterState(this.closest('.register-form'))"></textarea>
                         </label>
-                        <button type="button" onclick="generateBrowserKeypair()">Generate keypair in browser</button>
+                        <button type="button" id="reg-generate-btn" onclick="generateBrowserKeypair()">Generate keypair in browser</button>
                         <div id="reg-privkey-box" style="display:none;">
                             <strong>Private key — copy it now, it is not stored anywhere:</strong>
                             <textarea id="reg-privkey" rows="5" readonly onclick="this.select()"></textarea>
                         </div>
-                        <button type="button" onclick="registerDevice(this)">Register Device</button>
+                        <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
                     </div>
                 `)
                 .addTo(map);
@@ -343,14 +343,26 @@
             return `-----BEGIN ${label}-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END ${label}-----`;
         }
 
+        // Enable Register only when a pubkey is present AND a GPS fix has
+        // been captured for the location; disable Generate keypair once
+        // there is already a pubkey to avoid clobbering the device key.
+        function updateRegisterState(form) {
+            const pubkey = form.querySelector('#reg-pubkey').value.trim();
+            const hasFix = form.dataset.hasFix === '1';
+            form.querySelector('#reg-register-btn').disabled = !(pubkey && hasFix);
+            form.querySelector('#reg-generate-btn').disabled = pubkey !== '';
+        }
+
         async function generateBrowserKeypair() {
             const keys = await crypto.subtle.generateKey(
                 { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
             const pub = await crypto.subtle.exportKey('spki', keys.publicKey);
             const priv = await crypto.subtle.exportKey('pkcs8', keys.privateKey);
-            document.getElementById('reg-pubkey').value = pemEncode(pub, 'PUBLIC KEY');
+            const pubkeyEl = document.getElementById('reg-pubkey');
+            pubkeyEl.value = pemEncode(pub, 'PUBLIC KEY');
             document.getElementById('reg-privkey').value = pemEncode(priv, 'PRIVATE KEY');
             document.getElementById('reg-privkey-box').style.display = 'block';
+            updateRegisterState(pubkeyEl.closest('.register-form'));
         }
 
         // Wrap the raw ATECC/mbedtls X||Y (128 hex chars) as a P-256 SPKI PEM.
@@ -448,6 +460,7 @@
                         } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
                             document.getElementById('reg-pubkey').value = await xyHexToPem(m[1]);
                             gotPubkey = true;
+                            updateRegisterState(form);
                             renderInfo();
                         } else if ((m = line.match(/^GPS:\s+chars=\d+\s+sats=(\d+)\s+hdop=[\d.]+\s+inview=(\d+)/))) {
                             gpsSats = parseInt(m[1], 10);
@@ -457,7 +470,9 @@
                             const dLat = parseFloat(m[1]), dLng = parseFloat(m[2]);
                             form.dataset.lat = dLat;
                             form.dataset.lng = dLng;
+                            form.dataset.hasFix = '1';
                             gotFix = true;
+                            updateRegisterState(form);
                             info.textContent = `Device id: ${deviceId} — pubkey filled, fix ${dLat.toFixed(5)}, ${dLng.toFixed(5)}`;
                         }
                     }
