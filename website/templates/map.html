@@ -318,6 +318,9 @@
                                 <span slot="unsupported">Install requires Chrome or Edge on desktop.</span>
                                 <span slot="not-allowed">Open this page over HTTPS to install.</span>
                             </esp-web-install-button>
+                            <div class="from-device-hint">
+                                If Install fails, hold BOOT on the board while clicking Install, and release once the progress bar moves. If the dialog gets stuck on "Connecting", close it and reload this page.
+                            </div>
                             <button type="button" onclick="readFromDevice(this)">Read from device</button>
                             <div id="reg-device-info" class="from-device-info"></div>
                         </div>

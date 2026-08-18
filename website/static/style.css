@@ -203,6 +203,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   padding: 8px; border: 1px dashed var(--border); border-radius: 6px;
 }
 .from-device-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.from-device-hint { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
 .from-device-info { font-size: 11px; color: var(--text-muted); min-height: 14px; }
 esp-web-install-button { display: block; }
 
