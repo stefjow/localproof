@@ -194,7 +194,8 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content button { padding: 8px 12px; font-family: var(--font); font-size: 13px;
   background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; cursor: pointer; min-height: 44px; }
-.popup-content button:hover { background: rgba(255,255,255,0.14); }
+.popup-content button:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+.popup-content button:disabled { opacity: 0.35; cursor: not-allowed; }
 .popup-content a { color: var(--accent); }
 
 /* "From a connected device" — WebSerial + ESP Web Tools helpers */
