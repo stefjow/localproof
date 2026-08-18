@@ -367,9 +367,20 @@
         }
 
         // Read Device ID, Pubkey and GPS coords over WebSerial and pre-fill
-        // the register form. The firmware prints these once at boot, so we
-        // pulse RTS to reset the ESP32 and capture the boot output.
+        // the register form. The firmware prints Device ID + Pubkey at boot
+        // and one "GPS location acquired: lat,lng" line when the fix lands;
+        // between them a "GPS: chars=... sats=... inview=..." diagnostic
+        // line every 10 s. We keep the port open until the fix arrives or
+        // the user clicks Stop, so a cold fix does not force a second click.
+        let currentRead = null;
+
         async function readFromDevice(button) {
+            // Toggle: if a read is in flight, cancel it.
+            if (currentRead) {
+                currentRead.cancel();
+                return;
+            }
+
             if (!navigator.serial) {
                 alert('WebSerial is not available in this browser. Use Chrome or Edge on desktop.');
                 return;
@@ -384,8 +395,6 @@
                 if (err.name !== 'NotFoundError') alert('Could not open serial port: ' + err.message);
                 return;
             }
-            button.disabled = true;
-            button.textContent = 'Reading…';
             info.textContent = 'Press the RESET (or EN) button on the ESP32 board now to trigger fresh boot output.';
 
             // Deliberately not calling port.setSignals() to reset: on some
@@ -398,20 +407,23 @@
             const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
             const reader = decoder.readable.getReader();
 
-            // Bounded read via reader.cancel() timers — never race reader.read()
-            // itself, or the losing chunk is discarded when the port streams it.
+            // Safety net: never hold the port longer than 10 minutes even
+            // if the user leaves the tab. Fast paths bail earlier.
+            const overallTimer = setTimeout(() => { reader.cancel().catch(() => {}); }, 600000);
+
             let buffer = '', gotPubkey = false, gotFix = false, deviceId = '';
             let gpsSats = null, gpsInview = null;
-            const overallTimer = setTimeout(() => { reader.cancel().catch(() => {}); }, 30000);
-            let pubkeyTimer = null;
             const renderInfo = () => {
+                if (gotFix) return;                   // fix handler writes its own line with coords
                 if (!gotPubkey) return;
                 let s = `Device id: ${deviceId} — pubkey filled`;
-                if (gotFix) return;  // fix handler writes its own line with coords
                 if (gpsSats !== null) s += ` — GPS ${gpsSats} in fix / ${gpsInview} in view`;
                 else s += ' — watching for GPS fix…';
                 info.textContent = s;
             };
+
+            currentRead = { cancel: () => reader.cancel().catch(() => {}) };
+            button.textContent = 'Stop watching';
             let readError = null;
             try {
                 while (true) {
@@ -437,12 +449,6 @@
                             document.getElementById('reg-pubkey').value = await xyHexToPem(m[1]);
                             gotPubkey = true;
                             renderInfo();
-                            // Long enough to catch at least one GPS diagnostic
-                            // line (fired every 10 s) so we can surface sat
-                            // counts, but not so long that we hold /dev/tty*
-                            // for a cold fix (which can take minutes).
-                            if (!pubkeyTimer) pubkeyTimer = setTimeout(
-                                () => { reader.cancel().catch(() => {}); }, 15000);
                         } else if ((m = line.match(/^GPS:\s+chars=\d+\s+sats=(\d+)\s+hdop=[\d.]+\s+inview=(\d+)/))) {
                             gpsSats = parseInt(m[1], 10);
                             gpsInview = parseInt(m[2], 10);
@@ -459,19 +465,18 @@
                 }
             } finally {
                 clearTimeout(overallTimer);
-                if (pubkeyTimer) clearTimeout(pubkeyTimer);
                 try { await reader.cancel(); } catch (e) {}
                 try { await readableClosed; } catch (e) {}
                 try { await port.close(); } catch (e) {}
+                currentRead = null;
             }
-            button.disabled = false;
             button.textContent = gotPubkey ? 'Read again' : 'Read from device';
             if (readError) {
                 info.textContent = `Serial connection lost (${readError.name}). Unplug and replug the USB cable, then try again.`;
             } else if (!gotPubkey) {
                 info.textContent = 'No Pubkey: line arrived. Click Read again and press RESET on the device.';
             } else if (!gotFix) {
-                info.textContent += ' — no fix yet; click Read again once more satellites are in view.';
+                info.textContent += ' — stopped watching. Click Read again to resume.';
             }
         }
 
