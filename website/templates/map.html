@@ -358,18 +358,18 @@
                 });
             }
 
-            // ESP Web Tools does its end-of-flash reporting via console.log
-            // ("Hard resetting via RTS pin...", "Improv initialization
-            // failed"), not by rendering into the shadow DOM — so wrap
-            // console.log briefly to catch those. Unwrap once the dialog
-            // has been closed to avoid leaking the patch.
+            // ESP Web Tools does its end-of-flash reporting via console.log,
+            // not by rendering into the shadow DOM — so wrap console.log
+            // briefly to catch it. Trigger only on "Improv initialization
+            // failed" (the very last log after the flash), so the serial
+            // port is fully released by the time we close the dialog.
             const origLog = console.log;
             let watching = true;
             console.log = function (...args) {
                 try {
                     if (watching) {
                         const s = args.map(a => (typeof a === 'string' ? a : '')).join(' ');
-                        if (/hard resetting via rts|improv initialization failed|leaving\.\.\./i.test(s)) {
+                        if (/improv initialization failed/i.test(s)) {
                             watching = false;
                             console.log = origLog;
                             closeInstallDialog();
@@ -384,8 +384,22 @@
 
             function closeInstallDialog() {
                 setTimeout(() => {
-                    document.querySelectorAll('ewt-install-dialog').forEach(d => d.remove());
-                }, 300);
+                    document.querySelectorAll('ewt-install-dialog').forEach(d => {
+                        // Ask the dialog to close itself first so it can
+                        // release the WebSerial port; fall back to hard
+                        // removal if that method is not exposed.
+                        try {
+                            if (typeof d.close === 'function') d.close();
+                            else d.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
+                        } catch (e) {}
+                        setTimeout(() => d.remove(), 400);
+                    });
+                    const info = document.getElementById('reg-device-info');
+                    if (info) {
+                        info.className = 'from-device-info action';
+                        info.textContent = 'Firmware installed. Click "Read from device" next.';
+                    }
+                }, 500);
             }
         });
 
