@@ -304,18 +304,15 @@
         // maxZoom keeps a lone device from filling the screen at street level.
         map.on('load', () => {
             if (bounds.isEmpty() || skipInitialFit) return;
-            const rail = document.getElementById('side-rail');
-            map.fitBounds(bounds, {
-                // Keep the padding symmetric left/right or a single device
-                // lands off-centre. The collapsed rail is only a bar across
-                // the top, so clear its height rather than its width.
-                padding: {
-                    top: (rail ? rail.getBoundingClientRect().height : 0) + 40,
-                    bottom: 60, left: 60, right: 60,
-                },
-                maxZoom: 12,
-                duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1600,
-            });
+            const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1600;
+            const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
+            if (ne.lng === sw.lng && ne.lat === sw.lat) {
+                // A single device is a zero-area box: fitBounds would derive
+                // its centre from the padding, so set the camera outright.
+                map.easeTo({ center: ne, zoom: 13, duration });
+            } else {
+                map.fitBounds(bounds, { padding: 80, maxZoom: 13, duration });
+            }
         });
         {% endif %}
 
