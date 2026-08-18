@@ -350,19 +350,13 @@
             }
             button.disabled = true;
             button.textContent = 'Reading…';
-            info.textContent = 'Resetting device — if nothing appears in a few seconds, press RESET on the board.';
+            info.textContent = 'Press the RESET (or EN) button on the ESP32 board now to trigger fresh boot output.';
 
-            // Mimic esptool's default_reset: DTR low (GPIO0 released), RTS
-            // high pulls EN low for ~100 ms, then RTS low lets the chip
-            // boot. Chromium's WebSerial signal delivery is flaky on some
-            // USB-serial chips, so we pulse twice and rely on a physical
-            // reset as the documented fallback.
-            for (let i = 0; i < 2; i++) {
-                try { await port.setSignals({ dataTerminalReady: false, requestToSend: true }); } catch (e) {}
-                await new Promise(r => setTimeout(r, 120));
-                try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch (e) {}
-                await new Promise(r => setTimeout(r, 300));
-            }
+            // Deliberately not calling port.setSignals() to reset: on some
+            // USB-serial chips (CP2102 in particular) Chromium's signal
+            // delivery briefly drops the USB device from the bus, which
+            // throws NetworkError: "device has been lost" and terminates
+            // the read. Physical RESET is more reliable.
 
             const decoder = new TextDecoderStream();
             const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
@@ -382,9 +376,16 @@
                 else s += ' — watching for GPS fix…';
                 info.textContent = s;
             };
+            let readError = null;
             try {
                 while (true) {
-                    const { value, done } = await reader.read();
+                    let value, done;
+                    try {
+                        ({ value, done } = await reader.read());
+                    } catch (err) {
+                        readError = err;
+                        break;
+                    }
                     if (done) break;
                     buffer += value;
                     let idx;
@@ -429,8 +430,10 @@
             }
             button.disabled = false;
             button.textContent = gotPubkey ? 'Read again' : 'Read from device';
-            if (!gotPubkey) {
-                alert('No Pubkey: line arrived. Click Read again and press the RESET/EN button on the device once the port picker closes — that always triggers fresh boot output.');
+            if (readError) {
+                info.textContent = `Serial connection lost (${readError.name}). Unplug and replug the USB cable, then try again.`;
+            } else if (!gotPubkey) {
+                info.textContent = 'No Pubkey: line arrived. Click Read again and press RESET on the device.';
             } else if (!gotFix) {
                 info.textContent += ' — no fix yet; click Read again once more satellites are in view.';
             }
