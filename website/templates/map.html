@@ -267,7 +267,9 @@
             return marker;
         }
 
-        // Devices from the server (all currently active)
+        // Devices from the server. Normally all active, but the QR-scan
+        // render also includes the scanned device so it can be shown even
+        // before its first validation — only active ones frame the map.
         {% for device in devices %}
         createActiveMarker({{ {
             'device_id': device.device_id,
@@ -277,7 +279,7 @@
             'username': device.username,
             'max_validations': device.max_validations,
         }|tojson }});
-        bounds.extend([{{ device.lng }}, {{ device.lat }}]);
+        {% if device.active %}bounds.extend([{{ device.lng }}, {{ device.lat }}]);{% endif %}
         {% endfor %}
 
         {% if esp_lat and esp_lng %}
@@ -303,12 +305,13 @@
         map.on('load', () => {
             if (bounds.isEmpty() || skipInitialFit) return;
             const rail = document.getElementById('side-rail');
-            const railWidth = rail ? rail.getBoundingClientRect().width : 0;
             map.fitBounds(bounds, {
-                // Keep the fitted area clear of the rail on wide screens.
+                // Keep the padding symmetric left/right or a single device
+                // lands off-centre. The collapsed rail is only a bar across
+                // the top, so clear its height rather than its width.
                 padding: {
-                    top: 80, bottom: 80, left: 80,
-                    right: Math.min(railWidth + 40, window.innerWidth * 0.4),
+                    top: (rail ? rail.getBoundingClientRect().height : 0) + 40,
+                    bottom: 60, left: 60, right: 60,
                 },
                 maxZoom: 12,
                 duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1600,
