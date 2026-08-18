@@ -345,17 +345,43 @@
 
             // Auto-close the ESP Web Tools install dialog when the flash
             // finishes, so the user lands back in the register popup instead
-            // of the "Install localproof / Logs & Console" screen.
+            // of the "Install localproof / Logs & Console" screen. Belt and
+            // braces: (1) state-changed if the library dispatches it, (2)
+            // MutationObserver on the dialog's shadow root looking for the
+            // "installation complete" success text.
             const installBtn = popup.getElement().querySelector('esp-web-install-button');
             if (installBtn) {
                 installBtn.addEventListener('state-changed', (ev) => {
+                    console.debug('[esp-web-tools state]', ev.detail);
                     const st = ev.detail && String(ev.detail.state || '').toUpperCase();
-                    if (st === 'FINISHED') {
-                        setTimeout(() => {
-                            document.querySelectorAll('ewt-install-dialog').forEach(d => d.remove());
-                        }, 300);
+                    if (st === 'FINISHED') closeInstallDialog();
+                });
+            }
+
+            // Watch the DOM for the ewt-install-dialog appearing, then watch
+            // its shadow root for the completion text.
+            const bodyObserver = new MutationObserver(() => {
+                const dlg = document.querySelector('ewt-install-dialog');
+                if (!dlg || dlg._localproofHooked) return;
+                dlg._localproofHooked = true;
+                const root = dlg.shadowRoot;
+                if (!root) return;
+                const inner = new MutationObserver(() => {
+                    const text = (root.textContent || '').toLowerCase();
+                    if (/installation complete|installed successfully|installation was successful|your device is ready|successfully installed/.test(text)) {
+                        closeInstallDialog();
+                        inner.disconnect();
+                        bodyObserver.disconnect();
                     }
                 });
+                inner.observe(root, { childList: true, subtree: true, characterData: true });
+            });
+            bodyObserver.observe(document.body, { childList: true, subtree: true });
+
+            function closeInstallDialog() {
+                setTimeout(() => {
+                    document.querySelectorAll('ewt-install-dialog').forEach(d => d.remove());
+                }, 300);
             }
         });
 
