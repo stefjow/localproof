@@ -296,6 +296,10 @@
             document.addEventListener('keydown', hide);
         })();
 
+        // Register-popup handle so readFromDevice can move it to the fix
+        // location (and fly the map) when GPS coords arrive.
+        let activeRegisterPopup = null;
+
         // Right-click / long-tap to register a new device (login required).
         map.on('contextmenu', (e) => {
             {% if not current_user.is_authenticated %}
@@ -336,6 +340,8 @@
                     </div>
                 `)
                 .addTo(map);
+            activeRegisterPopup = popup;
+            popup.on('close', () => { if (activeRegisterPopup === popup) activeRegisterPopup = null; });
         });
 
         function pemEncode(buffer, label) {
@@ -474,6 +480,8 @@
                             gotFix = true;
                             updateRegisterState(form);
                             info.textContent = `Device id: ${deviceId} — pubkey filled, fix ${dLat.toFixed(5)}, ${dLng.toFixed(5)}`;
+                            if (activeRegisterPopup) activeRegisterPopup.setLngLat([dLng, dLat]);
+                            map.flyTo({ center: [dLng, dLat], zoom: 15 });
                         }
                     }
                     if (gotPubkey && gotFix) break;
