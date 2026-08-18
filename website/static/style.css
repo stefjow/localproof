@@ -197,6 +197,15 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content button:hover { background: rgba(255,255,255,0.14); }
 .popup-content a { color: var(--accent); }
 
+/* "From a connected device" — WebSerial + ESP Web Tools helpers */
+.from-device-section {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; border: 1px dashed var(--border); border-radius: 6px;
+}
+.from-device-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.from-device-info { font-size: 11px; color: var(--text-muted); min-height: 14px; }
+esp-web-install-button { display: block; }
+
 /* Legacy popup table used by the map's per-marker log view */
 .validation-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
 .validation-table th, .validation-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }

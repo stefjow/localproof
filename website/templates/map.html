@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="/static/style.css">
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
     <style>
         .overlay-circle {
             background: {% if nonce %}rgba(100, 100, 100, 1){% elif success == 'true' %}rgba(0, 97, 100, 1){% else %}rgba(219, 67, 37, 1){% endif %};
@@ -273,19 +274,29 @@
                 .setLngLat(e.lngLat)
                 .setHTML(`
                     <div class="popup-headline">Register Device</div>
-                    <div class="popup-content register-form">
+                    <div class="popup-content register-form" data-lat="${lat}" data-lng="${lng}">
                         <label>Name (optional)<input type="text" id="reg-name" maxlength="80" placeholder="e.g. Front door"></label>
                         <label>Description (optional)<input type="text" id="reg-description" maxlength="200"></label>
                         <label>Max validations / cycle<input type="number" id="reg-max-validations" min="1" value="1" required></label>
+                        <div class="from-device-section">
+                            <div class="from-device-label">From a connected device (Chromium only)</div>
+                            <esp-web-install-button manifest="/static/firmware/manifest.json">
+                                <button slot="activate" type="button">Install firmware</button>
+                                <span slot="unsupported">Install requires Chrome or Edge on desktop.</span>
+                                <span slot="not-allowed">Open this page over HTTPS to install.</span>
+                            </esp-web-install-button>
+                            <button type="button" onclick="readFromDevice(this)">Read from device</button>
+                            <div id="reg-device-info" class="from-device-info"></div>
+                        </div>
                         <label>Public key (PEM)
-                            <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;from hw_probe + 'python_generator_v2.py pem', or generate below"></textarea>
+                            <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;auto-filled from the device, or generate below"></textarea>
                         </label>
                         <button type="button" onclick="generateBrowserKeypair()">Generate keypair in browser</button>
                         <div id="reg-privkey-box" style="display:none;">
                             <strong>Private key — copy it now, it is not stored anywhere:</strong>
                             <textarea id="reg-privkey" rows="5" readonly onclick="this.select()"></textarea>
                         </div>
-                        <button type="button" onclick="registerDevice(${lat}, ${lng}, this)">Register Device</button>
+                        <button type="button" onclick="registerDevice(this)">Register Device</button>
                     </div>
                 `)
                 .addTo(map);
@@ -306,7 +317,96 @@
             document.getElementById('reg-privkey-box').style.display = 'block';
         }
 
-        function registerDevice(lat, lng, button) {
+        // Wrap the raw ATECC/mbedtls X||Y (128 hex chars) as a P-256 SPKI PEM.
+        async function xyHexToPem(hex) {
+            const bytes = new Uint8Array(1 + 64);
+            bytes[0] = 0x04;  // uncompressed EC point tag
+            for (let i = 0; i < 64; i++) bytes[i + 1] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+            const key = await crypto.subtle.importKey(
+                'raw', bytes,
+                { name: 'ECDSA', namedCurve: 'P-256' },
+                true, ['verify']);
+            const spki = await crypto.subtle.exportKey('spki', key);
+            return pemEncode(spki, 'PUBLIC KEY');
+        }
+
+        // Read Device ID, Pubkey and GPS coords over WebSerial and pre-fill
+        // the register form. The firmware prints these once at boot, so we
+        // pulse RTS to reset the ESP32 and capture the boot output.
+        async function readFromDevice(button) {
+            if (!navigator.serial) {
+                alert('WebSerial is not available in this browser. Use Chrome or Edge on desktop.');
+                return;
+            }
+            const info = document.getElementById('reg-device-info');
+            const form = button.closest('.register-form');
+            let port;
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+            } catch (err) {
+                if (err.name !== 'NotFoundError') alert('Could not open serial port: ' + err.message);
+                return;
+            }
+            button.disabled = true;
+            button.textContent = 'Reading…';
+            info.textContent = 'Resetting device…';
+
+            try { await port.setSignals({ requestToSend: true }); } catch (e) {}
+            await new Promise(r => setTimeout(r, 100));
+            try { await port.setSignals({ requestToSend: false }); } catch (e) {}
+
+            const decoder = new TextDecoderStream();
+            const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
+            const reader = decoder.readable.getReader();
+
+            const deadline = Date.now() + 180000;  // up to 3 min for a cold GPS fix
+            let buffer = '', gotPubkey = false, gotFix = false, deviceId = '';
+            try {
+                while (Date.now() < deadline) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += value;
+                    let idx;
+                    while ((idx = buffer.indexOf('\n')) !== -1) {
+                        const line = buffer.slice(0, idx).trim();
+                        buffer = buffer.slice(idx + 1);
+                        let m;
+                        if ((m = line.match(/^Device ID:\s*([0-9a-fA-F]{8})$/))) {
+                            deviceId = m[1];
+                            info.textContent = `Device id: ${deviceId} — waiting for pubkey…`;
+                        } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
+                            document.getElementById('reg-pubkey').value = await xyHexToPem(m[1]);
+                            gotPubkey = true;
+                            info.textContent = `Device id: ${deviceId} — pubkey filled, waiting for GPS fix…`;
+                        } else if ((m = line.match(/^GPS location acquired:\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)$/))) {
+                            const dLat = parseFloat(m[1]), dLng = parseFloat(m[2]);
+                            form.dataset.lat = dLat;
+                            form.dataset.lng = dLng;
+                            gotFix = true;
+                            info.textContent = `Device id: ${deviceId} — pubkey filled, fix ${dLat.toFixed(5)}, ${dLng.toFixed(5)}`;
+                        }
+                    }
+                    if (gotPubkey && gotFix) break;
+                }
+            } finally {
+                try { await reader.cancel(); } catch (e) {}
+                try { await readableClosed; } catch (e) {}
+                try { await port.close(); } catch (e) {}
+            }
+            button.disabled = false;
+            button.textContent = gotPubkey ? 'Read again' : 'Read from device';
+            if (!gotPubkey) {
+                alert('Did not receive a Pubkey: line from the device. Make sure it is running current localproof firmware and try again.');
+            } else if (!gotFix) {
+                info.textContent += ' (still searching — read again once the fix lands to prefill coordinates)';
+            }
+        }
+
+        function registerDevice(button) {
+            const form = button.closest('.register-form');
+            const lat = parseFloat(form.dataset.lat);
+            const lng = parseFloat(form.dataset.lng);
             let maxV = parseInt(document.getElementById('reg-max-validations').value, 10);
             if (isNaN(maxV) || maxV < 1) maxV = 1;
             const pubkey = document.getElementById('reg-pubkey').value.trim();

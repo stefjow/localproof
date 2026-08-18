@@ -263,6 +263,15 @@ void setup() {
   Serial.print("Device ID: ");
   Serial.println(deviceId);
 
+  // Also emit the raw pubkey X||Y so the browser's "Read from device"
+  // path can register a device without a separate hw_probe run.
+  uint8_t xyPub[64];
+  if (readDevicePubkey(xyPub)) {
+    Serial.print("Pubkey: ");
+    for (int i = 0; i < 64; i++) Serial.printf("%02x", xyPub[i]);
+    Serial.println();
+  }
+
   // Check the reset reason
   esp_reset_reason_t resetReason = esp_reset_reason();
 
