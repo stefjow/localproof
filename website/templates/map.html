@@ -391,6 +391,7 @@
                     while ((idx = buffer.indexOf('\n')) !== -1) {
                         const line = buffer.slice(0, idx).trim();
                         buffer = buffer.slice(idx + 1);
+                        console.debug('[localproof serial]', line.length, JSON.stringify(line));
                         let m;
                         if ((m = line.match(/^Device ID:\s*([0-9a-fA-F]{8})$/))) {
                             deviceId = m[1];
