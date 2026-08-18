@@ -13,9 +13,12 @@
 #include <mbedtls/version.h>
 #include <string.h>
 
-// Device identity: copy secrets.h.example to secrets.h and fill in the
-// values from `python python_generator_v2.py keygen` / `secrets`.
+// Device identity is derived from the on-chip pubkey (see deriveDeviceId()).
+// secrets.h is only needed for the software-key fallback; release binaries
+// ship without it and require an ATECC608.
+#if __has_include("secrets.h")
 #include "secrets.h"
+#endif
 
 // SETUP
 //String baseUrl = "http://localhost:5005/"; // Dynamic base URL
