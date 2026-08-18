@@ -12,6 +12,9 @@
         <a href="/my-validations">My Validations</a>
         <a href="#" onclick="logout(); return false;">Logout</a>
       </nav>
+      {# On the map page JS intercepts this and opens the modal in place;
+         from the inner pages it navigates to the map, which opens it. #}
+      <a class="auth-cta" id="nav-add-device" href="/?add=1">+ Add Device</a>
     </div>
   {% else %}
     <div id="login-form">

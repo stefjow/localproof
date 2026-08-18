@@ -182,41 +182,98 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content { max-width: 340px; }
 .popup-scroll { max-height: 200px; overflow-y: auto; margin-top: 6px; }
 .popup-links { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 13px; }
-/* Both classes sit on the same element, so this needs the compound
-   selector (.popup-content.register-form), not a descendant combinator. */
-.popup-content.register-form { display: flex; flex-direction: column; gap: 10px; }
-.popup-content label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
-.popup-content input,
-.popup-content textarea {
-  width: 100%; padding: 7px 9px; background: rgba(255,255,255,0.05); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px; font-family: var(--font); font-size: 13px;
-  min-height: 36px;
-}
-.popup-content input::placeholder,
-.popup-content textarea::placeholder { color: rgba(154, 164, 173, 0.55); }
-.popup-content input:focus,
-.popup-content textarea:focus {
-  outline: none; border-color: var(--accent); background: rgba(255,255,255,0.08);
-}
-.popup-content textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px; line-height: 1.45; min-height: 72px; resize: vertical;
-}
 .popup-content button { padding: 8px 12px; font-family: var(--font); font-size: 13px;
   background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; cursor: pointer; min-height: 44px; }
 .popup-content button:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
-.popup-content button:disabled { opacity: 0.35; cursor: not-allowed; }
 .popup-content a { color: var(--accent); }
 
-/* Generate / Register sit side by side, with clear air above them. */
-.register-actions { display: flex; gap: 8px; margin-top: 6px; }
+/* -- Add Device modal ---------------------------------------------------- */
+.auth-cta {
+  display: block; margin-top: 10px; padding: 9px 12px;
+  text-align: center; text-decoration: none; font-size: 13px; font-weight: 600;
+  color: var(--text); background: rgba(0, 97, 100, 0.4);
+  border: 1px solid rgba(0, 97, 100, 0.7); border-radius: 6px;
+}
+.auth-cta:hover { background: rgba(0, 97, 100, 0.55); }
+
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 16px; overflow-y: auto;
+}
+.modal-backdrop[hidden] { display: none; }
+.modal {
+  width: 100%; max-width: 460px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.modal-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.modal-close {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 24px; line-height: 1; padding: 0 4px; cursor: pointer;
+}
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 18px; }
+
+/* -- Register form (inside the modal) ------------------------------------ */
+.register-form { display: flex; flex-direction: column; gap: 18px; }
+.register-form .reg-section { display: flex; flex-direction: column; gap: 8px; }
+.reg-section-title {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.register-form label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.register-form input,
+.register-form textarea {
+  width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; font-family: var(--font); font-size: 13px;
+  min-height: 38px;
+}
+.register-form input::placeholder,
+.register-form textarea::placeholder { color: rgba(154, 164, 173, 0.55); }
+.register-form input:focus,
+.register-form textarea:focus {
+  outline: none; border-color: var(--accent); background: rgba(255,255,255,0.08);
+}
+.register-form textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; line-height: 1.45; min-height: 72px; resize: vertical;
+}
+.register-form button {
+  padding: 9px 12px; font-family: var(--font); font-size: 13px;
+  background: rgba(255,255,255,0.08); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer; min-height: 42px;
+}
+.register-form button:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+.register-form button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Checklist of what the device has reported so far */
+.reg-status { display: flex; flex-direction: column; gap: 4px; }
+.reg-status-row { font-size: 12px; color: var(--text-muted); padding-left: 20px; position: relative; }
+.reg-status-row::before {
+  content: "○"; position: absolute; left: 2px; color: var(--text-muted);
+}
+.reg-status-row.done { color: var(--text); }
+.reg-status-row.done::before { content: "✓"; color: var(--accent); font-weight: 700; }
+
+.reg-pem summary {
+  font-size: 11px; color: var(--text-muted); cursor: pointer;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.reg-pem textarea { margin-top: 6px; }
+
+.register-actions { display: flex; }
 .register-actions button { flex: 1; }
 .register-actions #reg-register-btn:not(:disabled) {
-  background: rgba(0, 97, 100, 0.4); border-color: rgba(0, 97, 100, 0.7);
+  background: rgba(0, 97, 100, 0.45); border-color: rgba(0, 97, 100, 0.7); font-weight: 600;
 }
-.register-actions #reg-register-btn:hover:not(:disabled) { background: rgba(0, 97, 100, 0.55); }
-#reg-privkey-box { display: grid; gap: 4px; font-size: 12px; }
+.register-actions #reg-register-btn:hover:not(:disabled) { background: rgba(0, 97, 100, 0.6); }
 
 /* "From a connected device" — WebSerial + ESP Web Tools helpers */
 .from-device-section {

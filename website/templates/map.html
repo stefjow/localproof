@@ -32,6 +32,55 @@
     {% endif %}
     <div id="map"></div>
     {% include '_auth_panel.html' %}
+    {% if current_user.is_authenticated %}
+    <div class="modal-backdrop" id="add-device-modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="add-device-title">
+        <div class="modal-head">
+          <h2 id="add-device-title">Add Device</h2>
+          <button type="button" class="modal-close" onclick="closeAddDevice()" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body register-form" id="add-device-form">
+
+          <div class="reg-section">
+            <div class="reg-section-title">1 &middot; Connect the device</div>
+            <div class="from-device-section">
+              <esp-web-install-button manifest="/static/firmware/manifest.json">
+                <button slot="activate" type="button">Install firmware</button>
+                <span slot="unsupported">Install requires Chrome or Edge on desktop.</span>
+                <span slot="not-allowed">Open this page over HTTPS to install.</span>
+              </esp-web-install-button>
+              <div class="from-device-hint">
+                New board? Install the firmware first. If it fails, hold BOOT while clicking
+                Install and release once the progress bar moves.
+              </div>
+              <button type="button" onclick="readFromDevice(this)">Read from device</button>
+              <div id="reg-device-info" class="from-device-info"></div>
+            </div>
+            <div class="reg-status">
+              <div class="reg-status-row" id="reg-status-key">Public key</div>
+              <div class="reg-status-row" id="reg-status-fix">GPS position</div>
+            </div>
+            <details class="reg-pem">
+              <summary>Public key (PEM)</summary>
+              <textarea id="reg-pubkey" rows="4" readonly
+                        placeholder="filled in automatically by Read from device"></textarea>
+            </details>
+          </div>
+
+          <div class="reg-section">
+            <div class="reg-section-title">2 &middot; Describe it</div>
+            <label>Name (optional)<input type="text" id="reg-name" maxlength="80" placeholder="e.g. Front door"></label>
+            <label>Description (optional)<input type="text" id="reg-description" maxlength="200"></label>
+            <label>Max validations / cycle<input type="number" id="reg-max-validations" min="1" value="1" required></label>
+          </div>
+
+          <div class="register-actions">
+            <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
     <script>
         // MapLibre GL: raster tiles from CARTO dark_all give us native dark
@@ -296,140 +345,106 @@
             document.addEventListener('keydown', hide);
         })();
 
-        // Register-popup handle so readFromDevice can move it to the fix
-        // location (and fly the map) when GPS coords arrive.
-        let activeRegisterPopup = null;
+        {% if current_user.is_authenticated %}
+        // -- Add Device modal ------------------------------------------------
+        // The device reports its own position over serial, so registration
+        // needs no map interaction at all — it lives in a modal opened from
+        // the "+ Add Device" button in the auth panel.
+        const addDeviceModal = document.getElementById('add-device-modal');
 
-        // Right-click / long-tap to register a new device (login required).
-        map.on('contextmenu', (e) => {
-            {% if not current_user.is_authenticated %}
-            alert('You must be logged in to add a device.');
-            return;
-            {% endif %}
-            const lat = e.lngLat.lat, lng = e.lngLat.lng;
-            const popup = new maplibregl.Popup({ maxWidth: '360px' })
-                .setLngLat(e.lngLat)
-                .setHTML(`
-                    <div class="popup-headline">Register Device</div>
-                    <div class="popup-content register-form" data-lat="${lat}" data-lng="${lng}">
-                        <label>Name (optional)<input type="text" id="reg-name" maxlength="80" placeholder="e.g. Front door"></label>
-                        <label>Description (optional)<input type="text" id="reg-description" maxlength="200"></label>
-                        <label>Max validations / cycle<input type="number" id="reg-max-validations" min="1" value="1" required></label>
-                        <div class="from-device-section">
-                            <div class="from-device-label">From a connected device (Chromium only)</div>
-                            <esp-web-install-button manifest="/static/firmware/manifest.json">
-                                <button slot="activate" type="button">Install firmware</button>
-                                <span slot="unsupported">Install requires Chrome or Edge on desktop.</span>
-                                <span slot="not-allowed">Open this page over HTTPS to install.</span>
-                            </esp-web-install-button>
-                            <div class="from-device-hint">
-                                If Install fails, hold BOOT on the board while clicking Install, and release once the progress bar moves. If the dialog gets stuck on "Connecting", close it and reload this page.
-                            </div>
-                            <button type="button" onclick="readFromDevice(this)">Read from device</button>
-                            <div id="reg-device-info" class="from-device-info"></div>
-                        </div>
-                        <label>Public key (PEM)
-                            <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;auto-filled from the device, or generate below" oninput="updateRegisterState(this.closest('.register-form'))"></textarea>
-                        </label>
-                        <div id="reg-privkey-box" style="display:none;">
-                            <strong>Private key — copy it now, it is not stored anywhere:</strong>
-                            <textarea id="reg-privkey" rows="5" readonly onclick="this.select()"></textarea>
-                        </div>
-                        <div class="register-actions">
-                            <button type="button" id="reg-generate-btn" onclick="generateBrowserKeypair()">Generate keypair</button>
-                            <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
-                        </div>
-                    </div>
-                `)
-                .addTo(map);
-            activeRegisterPopup = popup;
-            popup.on('close', () => { if (activeRegisterPopup === popup) activeRegisterPopup = null; });
+        function openAddDevice() {
+            const form = document.getElementById('add-device-form');
+            form.querySelectorAll('input').forEach(el => {
+                el.value = el.type === 'number' ? '1' : '';
+            });
+            document.getElementById('reg-pubkey').value = '';
+            delete form.dataset.lat;
+            delete form.dataset.lng;
+            delete form.dataset.hasFix;
+            form.querySelector('.reg-pem').open = false;
+            const info = document.getElementById('reg-device-info');
+            info.className = 'from-device-info';
+            info.textContent = '';
+            updateRegisterState(form);
+            addDeviceModal.hidden = false;
+        }
 
-            // Auto-close the ESP Web Tools install dialog when the flash
-            // finishes, so the user lands back in the register popup instead
-            // of the "Install localproof / Logs & Console" screen. Belt and
-            // braces: (1) state-changed if the library dispatches it, (2)
-            // MutationObserver on the dialog's shadow root looking for the
-            // "installation complete" success text.
-            const installBtn = popup.getElement().querySelector('esp-web-install-button');
-            if (installBtn) {
-                installBtn.addEventListener('state-changed', (ev) => {
-                    console.debug('[esp-web-tools state]', ev.detail);
-                    const st = ev.detail && String(ev.detail.state || '').toUpperCase();
-                    if (st === 'FINISHED') closeInstallDialog();
-                });
-            }
+        function closeAddDevice() {
+            if (currentRead) currentRead.cancel();
+            addDeviceModal.hidden = true;
+        }
 
-            // ESP Web Tools does its end-of-flash reporting via console.log,
-            // not by rendering into the shadow DOM — so wrap console.log
-            // briefly to catch it. Trigger only on "Improv initialization
-            // failed" (the very last log after the flash), so the serial
-            // port is fully released by the time we close the dialog.
+        document.getElementById('nav-add-device').addEventListener('click', (e) => {
+            e.preventDefault();
+            openAddDevice();
+        });
+        addDeviceModal.addEventListener('click', (e) => {
+            if (e.target === addDeviceModal) closeAddDevice();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !addDeviceModal.hidden) closeAddDevice();
+        });
+        // Arriving from an inner page's "+ Add Device" link.
+        if (new URLSearchParams(location.search).get('add') === '1') {
+            openAddDevice();
+            history.replaceState(null, '', location.pathname);
+        }
+
+        // ESP Web Tools leaves its dialog open on the "Logs & Console" screen
+        // after a successful flash (our firmware has no Improv Wi-Fi Serial,
+        // so its post-flash probe fails and it never reaches a success view).
+        // It reports that through console.log rather than the shadow DOM, so
+        // wrap console.log and close the dialog on the very last line — by
+        // which point the serial port has been released.
+        (function watchInstallDialog() {
             const origLog = console.log;
-            let watching = true;
             console.log = function (...args) {
                 try {
-                    if (watching) {
-                        const s = args.map(a => (typeof a === 'string' ? a : '')).join(' ');
-                        if (/improv initialization failed/i.test(s)) {
-                            watching = false;
-                            console.log = origLog;
-                            closeInstallDialog();
-                        }
-                    }
+                    const s = args.map(a => (typeof a === 'string' ? a : '')).join(' ');
+                    if (/improv initialization failed/i.test(s)) closeInstallDialog();
                 } catch (e) {}
                 return origLog.apply(console, args);
             };
-            popup.on('close', () => {
-                if (watching) { watching = false; console.log = origLog; }
-            });
+        })();
 
-            function closeInstallDialog() {
-                setTimeout(() => {
-                    document.querySelectorAll('ewt-install-dialog').forEach(d => {
-                        // Ask the dialog to close itself first so it can
-                        // release the WebSerial port; fall back to hard
-                        // removal if that method is not exposed.
-                        try {
-                            if (typeof d.close === 'function') d.close();
-                            else d.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
-                        } catch (e) {}
-                        setTimeout(() => d.remove(), 400);
-                    });
-                    const info = document.getElementById('reg-device-info');
-                    if (info) {
-                        info.className = 'from-device-info action';
-                        info.textContent = 'Firmware installed. Click "Read from device" next.';
-                    }
-                }, 500);
-            }
-        });
+        function closeInstallDialog() {
+            setTimeout(() => {
+                document.querySelectorAll('ewt-install-dialog').forEach(d => {
+                    // Ask the dialog to close itself first so it can release
+                    // the WebSerial port; hard-remove only as a fallback.
+                    try {
+                        if (typeof d.close === 'function') d.close();
+                        else d.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
+                    } catch (e) {}
+                    setTimeout(() => d.remove(), 400);
+                });
+                const info = document.getElementById('reg-device-info');
+                if (info) {
+                    info.className = 'from-device-info action';
+                    info.textContent = 'Firmware installed. Click "Read from device" next.';
+                }
+            }, 500);
+        }
+        {% endif %}
 
         function pemEncode(buffer, label) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
             return `-----BEGIN ${label}-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END ${label}-----`;
         }
 
-        // Enable Register only when a pubkey is present AND a GPS fix has
-        // been captured for the location; disable Generate keypair once
-        // there is already a pubkey to avoid clobbering the device key.
+        // Register needs both halves of the device's self-report: its public
+        // key and the position it derived from its own GPS fix. Reflect each
+        // in the checklist so it is obvious what is still missing.
         function updateRegisterState(form) {
-            const pubkey = form.querySelector('#reg-pubkey').value.trim();
+            const hasKey = form.querySelector('#reg-pubkey').value.trim() !== '';
             const hasFix = form.dataset.hasFix === '1';
-            form.querySelector('#reg-register-btn').disabled = !(pubkey && hasFix);
-            form.querySelector('#reg-generate-btn').disabled = pubkey !== '';
-        }
-
-        async function generateBrowserKeypair() {
-            const keys = await crypto.subtle.generateKey(
-                { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-            const pub = await crypto.subtle.exportKey('spki', keys.publicKey);
-            const priv = await crypto.subtle.exportKey('pkcs8', keys.privateKey);
-            const pubkeyEl = document.getElementById('reg-pubkey');
-            pubkeyEl.value = pemEncode(pub, 'PUBLIC KEY');
-            document.getElementById('reg-privkey').value = pemEncode(priv, 'PRIVATE KEY');
-            document.getElementById('reg-privkey-box').style.display = 'grid';
-            updateRegisterState(pubkeyEl.closest('.register-form'));
+            form.querySelector('#reg-register-btn').disabled = !(hasKey && hasFix);
+            form.querySelector('#reg-status-key').classList.toggle('done', hasKey);
+            const fixRow = form.querySelector('#reg-status-fix');
+            fixRow.classList.toggle('done', hasFix);
+            fixRow.textContent = hasFix
+                ? `GPS position ${(+form.dataset.lat).toFixed(5)}, ${(+form.dataset.lng).toFixed(5)}`
+                : 'GPS position';
         }
 
         // Wrap the raw ATECC/mbedtls X||Y (128 hex chars) as a P-256 SPKI PEM.
@@ -542,8 +557,7 @@
                             form.dataset.hasFix = '1';
                             gotFix = true;
                             updateRegisterState(form);
-                            info.textContent = `Device id: ${deviceId} — pubkey filled, fix ${dLat.toFixed(5)}, ${dLng.toFixed(5)}`;
-                            if (activeRegisterPopup) activeRegisterPopup.setLngLat([dLng, dLat]);
+                            info.textContent = `Device id: ${deviceId} — ready to register.`;
                             map.flyTo({ center: [dLng, dLat], zoom: 15 });
                         }
                     }
@@ -575,7 +589,7 @@
             const pubkey = document.getElementById('reg-pubkey').value.trim();
             const name = document.getElementById('reg-name').value.trim();
             const description = document.getElementById('reg-description').value.trim();
-            if (!pubkey) { alert('Paste the device public key or generate a keypair first.'); return; }
+            if (!pubkey) { alert('Read the device first — it supplies its own public key.'); return; }
             button.disabled = true;
             button.textContent = 'Registering…';
             fetch('/add-device', {
@@ -586,10 +600,10 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    const deviceId = data.device_id;
-                    // Close popup by clearing the DOM element it lives in.
-                    document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
-                    addInactiveMarker(deviceId, lat, lng);
+                    closeAddDevice();
+                    button.textContent = 'Register Device';
+                    addInactiveMarker(data.device_id, lat, lng);
+                    map.flyTo({ center: [lng, lat], zoom: 15 });
                 } else {
                     alert('Failed to register device: ' + data.message);
                     button.disabled = false;
