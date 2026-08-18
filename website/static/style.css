@@ -188,26 +188,10 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content button:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
 .popup-content a { color: var(--accent); }
 
-/* -- Add Device modal ---------------------------------------------------- */
-.auth-cta {
-  display: block; margin-top: 10px; padding: 9px 12px;
-  text-align: center; text-decoration: none; font-size: 13px; font-weight: 600;
-  color: var(--text); background: rgba(0, 97, 100, 0.4);
-  border: 1px solid rgba(0, 97, 100, 0.7); border-radius: 6px;
-}
-.auth-cta:hover { background: rgba(0, 97, 100, 0.55); }
-
-.modal-backdrop {
-  position: fixed; inset: 0; z-index: 1100;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex; align-items: flex-start; justify-content: center;
-  padding: 40px 16px; overflow-y: auto;
-}
-.modal-backdrop[hidden] { display: none; }
-
-/* -- Drawer (My Devices / My Validations) -------------------------------- */
-/* Lists you browse rather than tasks you complete, so they slide in from the
-   side and leave the map visible instead of covering it. */
+/* -- Drawers ------------------------------------------------------------- */
+/* Every panel (devices, validations, add device) slides in from the side and
+   leaves the map visible instead of covering it — Add Device included, since
+   its flow flies the map to the device's GPS fix. */
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 1090;
   background: rgba(0, 0, 0, 0.45);
@@ -225,6 +209,11 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   padding: 16px 20px; border-bottom: 1px solid var(--border); flex: none;
 }
 .drawer-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.drawer-close {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 24px; line-height: 1; padding: 0 4px; cursor: pointer;
+}
+.drawer-close:hover { color: var(--text); }
 .drawer-body { padding: 20px; overflow-y: auto; flex: 1; }
 .drawer-body .hint { color: var(--text-muted); margin: 0 0 16px; font-size: 13px; }
 .drawer-body .device-card:last-child { margin-bottom: 0; }
@@ -233,24 +222,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .drawer-body { padding: 14px; }
   .device-meta { grid-template-columns: 1fr; }
 }
-.modal {
-  width: 100%; max-width: 460px;
-  background: var(--panel); border: 1px solid var(--panel-border);
-  border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-}
-.modal-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
-}
-.modal-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
-.modal-close {
-  background: none; border: none; color: var(--text-muted);
-  font-size: 24px; line-height: 1; padding: 0 4px; cursor: pointer;
-}
-.modal-close:hover { color: var(--text); }
-.modal-body { padding: 18px; }
-
-/* -- Register form (inside the modal) ------------------------------------ */
+/* -- Register form (inside the Add Device drawer) ------------------------ */
 .register-form { display: flex; flex-direction: column; gap: 18px; }
 .register-form .reg-section { display: flex; flex-direction: column; gap: 8px; }
 .reg-section-title {

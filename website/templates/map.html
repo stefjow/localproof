@@ -37,7 +37,7 @@
       <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="devices-drawer-title">
         <div class="drawer-head">
           <h2 id="devices-drawer-title">My Devices</h2>
-          <button type="button" class="modal-close" onclick="closeDrawer('devices-drawer')" aria-label="Close">&times;</button>
+          <button type="button" class="drawer-close" onclick="closeDrawer('devices-drawer')" aria-label="Close">&times;</button>
         </div>
         <div class="drawer-body">{% include '_devices_panel.html' %}</div>
       </aside>
@@ -47,19 +47,19 @@
       <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="validations-drawer-title">
         <div class="drawer-head">
           <h2 id="validations-drawer-title">My Validations</h2>
-          <button type="button" class="modal-close" onclick="closeDrawer('validations-drawer')" aria-label="Close">&times;</button>
+          <button type="button" class="drawer-close" onclick="closeDrawer('validations-drawer')" aria-label="Close">&times;</button>
         </div>
         <div class="drawer-body">{% include '_validations_panel.html' %}</div>
       </aside>
     </div>
 
-    <div class="modal-backdrop" id="add-device-modal" hidden>
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="add-device-title">
-        <div class="modal-head">
+    <div class="drawer-backdrop" id="add-device-drawer" hidden>
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="add-device-title">
+        <div class="drawer-head">
           <h2 id="add-device-title">Add Device</h2>
-          <button type="button" class="modal-close" onclick="closeAddDevice()" aria-label="Close">&times;</button>
+          <button type="button" class="drawer-close" onclick="closeDrawer('add-device-drawer')" aria-label="Close">&times;</button>
         </div>
-        <div class="modal-body register-form" id="add-device-form">
+        <div class="drawer-body register-form" id="add-device-form">
 
           <div class="reg-section">
             <div class="reg-section-title">1 &middot; Connect the device</div>
@@ -98,7 +98,7 @@
             <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
           </div>
         </div>
-      </div>
+      </aside>
     </div>
     {% endif %}
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
@@ -370,29 +370,34 @@
         })();
 
         {% if current_user.is_authenticated %}
-        // -- Drawers (My Devices / My Validations) ---------------------------
-        // The map is the app shell; these panels slide in over it rather than
-        // being separate pages, so /my-devices and /my-validations redirect
-        // here with ?devices=1 / ?validations=1.
-        const DRAWER_LOADERS = {
-            'devices-drawer': () => loadDevices(),
-            'validations-drawer': () => loadValidations(),
+        // -- Drawers -----------------------------------------------------------
+        // The map is the app shell; every panel slides in over it rather than
+        // being its own page, so /my-devices and /my-validations redirect here
+        // with ?devices=1 / ?validations=1. Add Device is a drawer too: its
+        // flow flies the map to the device's GPS fix, which is worth watching.
+        const DRAWERS = {
+            'devices-drawer': { load: () => loadDevices(), dismissible: true },
+            'validations-drawer': { load: () => loadValidations(), dismissible: true },
+            // Not dismissible by backdrop click: closing cancels an in-flight
+            // serial read, and a cold GPS fix can be a long wait to lose.
+            'add-device-drawer': { load: () => resetAddDeviceForm(), dismissible: false },
         };
 
         function openDrawer(id) {
             closeAllOverlays();
+            DRAWERS[id].load();
             document.getElementById(id).hidden = false;
-            const load = DRAWER_LOADERS[id];
-            if (load) load();
-        }
-        function closeDrawer(id) { document.getElementById(id).hidden = true; }
-
-        function closeAllOverlays() {
-            Object.keys(DRAWER_LOADERS).forEach(closeDrawer);
-            if (!addDeviceModal.hidden) closeAddDevice();
         }
 
-        for (const id of Object.keys(DRAWER_LOADERS)) {
+        function closeDrawer(id) {
+            if (id === 'add-device-drawer' && currentRead) currentRead.cancel();
+            document.getElementById(id).hidden = true;
+        }
+
+        function closeAllOverlays() { Object.keys(DRAWERS).forEach(closeDrawer); }
+
+        for (const [id, cfg] of Object.entries(DRAWERS)) {
+            if (!cfg.dismissible) continue;
             const el = document.getElementById(id);
             el.addEventListener('click', (e) => { if (e.target === el) closeDrawer(id); });
         }
@@ -429,13 +434,10 @@
             } catch (e) { console.error(e); }
         }
 
-        // -- Add Device modal ------------------------------------------------
+        // -- Add Device --------------------------------------------------------
         // The device reports its own position over serial, so registration
-        // needs no map interaction at all — it lives in a modal opened from
-        // the "+ Add Device" button in the auth panel.
-        const addDeviceModal = document.getElementById('add-device-modal');
-
-        function openAddDevice() {
+        // needs no map interaction — just a clean form each time it opens.
+        function resetAddDeviceForm() {
             const form = document.getElementById('add-device-form');
             form.querySelectorAll('input').forEach(el => {
                 el.value = el.type === 'number' ? '1' : '';
@@ -449,17 +451,8 @@
             info.className = 'from-device-info';
             info.textContent = '';
             updateRegisterState(form);
-            addDeviceModal.hidden = false;
         }
 
-        function closeAddDevice() {
-            if (currentRead) currentRead.cancel();
-            addDeviceModal.hidden = true;
-        }
-
-        addDeviceModal.addEventListener('click', (e) => {
-            if (e.target === addDeviceModal) closeAddDevice();
-        });
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') closeAllOverlays();
         });
@@ -467,7 +460,7 @@
         // Nav links carry real hrefs so they still work from the inner pages;
         // on the map we intercept them and open the overlay in place.
         const NAV_OVERLAYS = {
-            'nav-add-device': openAddDevice,
+            'nav-add-device': () => openDrawer('add-device-drawer'),
             'nav-my-devices': () => openDrawer('devices-drawer'),
             'nav-my-validations': () => openDrawer('validations-drawer'),
         };
@@ -478,7 +471,7 @@
 
         // Arriving from an inner page, or from the /my-devices redirect.
         const params = new URLSearchParams(location.search);
-        if (params.get('add') === '1') openAddDevice();
+        if (params.get('add') === '1') openDrawer('add-device-drawer');
         else if (params.get('devices') === '1') openDrawer('devices-drawer');
         else if (params.get('validations') === '1') openDrawer('validations-drawer');
         if (params.toString()) history.replaceState(null, '', location.pathname);
@@ -693,7 +686,7 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    closeAddDevice();
+                    closeDrawer('add-device-drawer');
                     button.textContent = 'Register Device';
                     addInactiveMarker(data.device_id, lat, lng);
                     map.flyTo({ center: [lng, lat], zoom: 15 });
