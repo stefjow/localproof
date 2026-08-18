@@ -19,11 +19,11 @@ sys.path.insert(0, os.path.join(REPO_ROOT, 'esp32'))
 import app as appmod  # noqa: E402
 from python_generator_v2 import sign_payload  # noqa: E402
 
-DEVICE_ID = '0001'
 DEV_LAT, DEV_LNG = 48.1889, 16.3763
 
 DEVICE_KEY = ECC.generate(curve='P-256')
 WRONG_KEY = ECC.generate(curve='P-256')
+DEVICE_ID = appmod.derive_device_id(DEVICE_KEY.public_key().export_key(format='PEM'))
 
 
 @pytest.fixture

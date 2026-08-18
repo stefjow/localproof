@@ -20,7 +20,13 @@
 // SETUP
 //String baseUrl = "http://localhost:5005/"; // Dynamic base URL
 String baseUrl = "https://localproof.libmap.org/";
-const char *deviceId = DEVICE_ID;
+
+// The device id is not a manual label any more: it is the first 4 bytes
+// of SHA-256(pubkey) rendered as 8 hex chars, computed on first boot from
+// the ATECC608 (or the software key) and cached in NVS. Flashing a fresh
+// board just works — the id it prints on the searching screen is what
+// the owner registers on the server.
+char deviceId[9] = "";
 
 Preferences preferences;
 
@@ -151,6 +157,66 @@ bool signMessage(const uint8_t *msg, size_t msgLen, uint8_t sig[64]) {
 #endif // DEVICE_PRIVATE_KEY_PEM
 }
 
+// Read the device's ECDSA P-256 public key as raw X||Y (64 bytes). Uses
+// the ATECC608 when present, else derives it from the software key. This
+// is what the server hashes to derive the device id, so both sides agree.
+bool readDevicePubkey(uint8_t xy[64]) {
+  if (useAtecc) {
+    return ECCX08.generatePublicKey(0, xy);
+  }
+#ifndef DEVICE_PRIVATE_KEY_PEM
+  return false;
+#else
+  mbedtls_pk_context pk;
+  mbedtls_pk_init(&pk);
+#if MBEDTLS_VERSION_MAJOR >= 3
+  int ret = mbedtls_pk_parse_key(&pk, (const unsigned char *)DEVICE_PRIVATE_KEY_PEM,
+                                 strlen(DEVICE_PRIVATE_KEY_PEM) + 1, NULL, 0, espRng, NULL);
+#else
+  int ret = mbedtls_pk_parse_key(&pk, (const unsigned char *)DEVICE_PRIVATE_KEY_PEM,
+                                 strlen(DEVICE_PRIVATE_KEY_PEM) + 1, NULL, 0);
+#endif
+  if (ret != 0) { mbedtls_pk_free(&pk); return false; }
+  mbedtls_ecp_keypair *kp = mbedtls_pk_ec(pk);
+  uint8_t uncompressed[65];  // 0x04 || X || Y
+  size_t olen = 0;
+#if MBEDTLS_VERSION_MAJOR >= 3
+  ret = mbedtls_ecp_point_write_binary(&kp->MBEDTLS_PRIVATE(grp), &kp->MBEDTLS_PRIVATE(Q),
+                                       MBEDTLS_ECP_PF_UNCOMPRESSED,
+                                       &olen, uncompressed, sizeof(uncompressed));
+#else
+  ret = mbedtls_ecp_point_write_binary(&kp->grp, &kp->Q,
+                                       MBEDTLS_ECP_PF_UNCOMPRESSED,
+                                       &olen, uncompressed, sizeof(uncompressed));
+#endif
+  mbedtls_pk_free(&pk);
+  if (ret != 0 || olen != 65) return false;
+  memcpy(xy, uncompressed + 1, 64);
+  return true;
+#endif
+}
+
+// Fill deviceId with the cached fingerprint, or derive and cache it.
+bool deriveDeviceId() {
+  String cached = preferences.getString("devid", "");
+  if (cached.length() == 8) {
+    cached.toCharArray(deviceId, sizeof(deviceId));
+    return true;
+  }
+  uint8_t xy[64];
+  if (!readDevicePubkey(xy)) return false;
+  uint8_t hash[32];
+#if MBEDTLS_VERSION_MAJOR >= 3
+  mbedtls_sha256(xy, 64, hash, 0);
+#else
+  mbedtls_sha256_ret(xy, 64, hash, 0);
+#endif
+  snprintf(deviceId, sizeof(deviceId), "%02x%02x%02x%02x",
+           hash[0], hash[1], hash[2], hash[3]);
+  preferences.putString("devid", deviceId);
+  return true;
+}
+
 // URL-safe base64 (padding kept, as the server's urlsafe_b64decode expects)
 bool base64url(const uint8_t *data, size_t dataLen, char *out, size_t outSize) {
   size_t b64Len = 0;
@@ -189,6 +255,13 @@ void setup() {
   useAtecc = ECCX08.begin() && ECCX08.locked();
   Serial.println(useAtecc ? "Signer: ATECC608 slot 0"
                           : "Signer: software key (no ATECC found)");
+
+  if (!deriveDeviceId()) {
+    displayErrorMessage("Cannot derive device ID.");
+    while (1);
+  }
+  Serial.print("Device ID: ");
+  Serial.println(deviceId);
 
   // Check the reset reason
   esp_reset_reason_t resetReason = esp_reset_reason();

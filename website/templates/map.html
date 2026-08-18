@@ -69,12 +69,6 @@
         const bounds = new maplibregl.LngLatBounds();
 
         function roundToFourDecimals(num) { return Math.round(num * 10000) / 10000; }
-        function generateRandomString(length) {
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            let s = '';
-            for (let i = 0; i < length; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
-            return s;
-        }
 
         function makeEmojiMarker(emoji) {
             const el = document.createElement('div');
@@ -274,14 +268,12 @@
             alert('You must be logged in to add a device.');
             return;
             {% endif %}
-            const deviceId = generateRandomString(4);
             const lat = e.lngLat.lat, lng = e.lngLat.lng;
             const popup = new maplibregl.Popup({ maxWidth: '360px' })
                 .setLngLat(e.lngLat)
                 .setHTML(`
                     <div class="popup-headline">Register Device</div>
                     <div class="popup-content register-form">
-                        <label>Device ID<input type="text" id="reg-device-id" value="${deviceId}" readonly></label>
                         <label>Name (optional)<input type="text" id="reg-name" maxlength="80" placeholder="e.g. Front door"></label>
                         <label>Description (optional)<input type="text" id="reg-description" maxlength="200"></label>
                         <label>Max validations / cycle<input type="number" id="reg-max-validations" min="1" value="1" required></label>
@@ -293,7 +285,7 @@
                             <strong>Private key — copy it now, it is not stored anywhere:</strong>
                             <textarea id="reg-privkey" rows="5" readonly onclick="this.select()"></textarea>
                         </div>
-                        <button type="button" onclick="registerDevice(${lat}, ${lng}, '${deviceId}', this)">Register Device</button>
+                        <button type="button" onclick="registerDevice(${lat}, ${lng}, this)">Register Device</button>
                     </div>
                 `)
                 .addTo(map);
@@ -314,7 +306,7 @@
             document.getElementById('reg-privkey-box').style.display = 'block';
         }
 
-        function registerDevice(lat, lng, deviceId, button) {
+        function registerDevice(lat, lng, button) {
             let maxV = parseInt(document.getElementById('reg-max-validations').value, 10);
             if (isNaN(maxV) || maxV < 1) maxV = 1;
             const pubkey = document.getElementById('reg-pubkey').value.trim();
@@ -326,11 +318,12 @@
             fetch('/add-device', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ device_id: deviceId, pubkey, lat, lng, max_validations: maxV, name, description }),
+                body: JSON.stringify({ pubkey, lat, lng, max_validations: maxV, name, description }),
             })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
+                    const deviceId = data.device_id;
                     // Close popup by clearing the DOM element it lives in.
                     document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
                     const el = document.createElement('div');
@@ -342,13 +335,7 @@
                         .addTo(map);
                     registeredMarkers.push(marker);
                 } else {
-                    if (data.message === 'Device ID already exists. Please try again.') {
-                        const newId = generateRandomString(4);
-                        document.getElementById('reg-device-id').value = newId;
-                        alert('Device ID already exists.\nA new one has been generated.');
-                    } else {
-                        alert('Failed to register device: ' + data.message);
-                    }
+                    alert('Failed to register device: ' + data.message);
                     button.disabled = false;
                     button.textContent = 'Register Device';
                 }

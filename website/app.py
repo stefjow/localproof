@@ -7,6 +7,7 @@ from Crypto.Hash import SHA256
 import base64
 import datetime
 import bcrypt
+import hashlib
 import os
 import secrets
 from math import radians, sin, cos, asin, sqrt
@@ -57,6 +58,14 @@ def parse_public_key_pem(pem):
     if key.has_private() or key.curve not in ('NIST P-256', 'p256'):
         return None
     return key.export_key(format='PEM')
+
+
+def derive_device_id(pubkey_pem):
+    """8 hex chars of SHA-256(X || Y). Matches the firmware, which hashes
+    the ATECC608's raw 64-byte public-key output the same way."""
+    key = ECC.import_key(pubkey_pem)
+    xy = key.pointQ.x.to_bytes(32, 'big') + key.pointQ.y.to_bytes(32, 'big')
+    return hashlib.sha256(xy).hexdigest()[:8]
 
 def verify_device_signature(pubkey_pem, message: bytes, signature: bytes) -> bool:
     """Verify an ECDSA P-256 signature (raw r||s, 64 bytes) over message."""
@@ -389,7 +398,6 @@ def add_device_route():
         return jsonify({'success': False, 'message': 'You must be logged in to add a device.'})
 
     data = request.get_json()
-    device_id = data.get('device_id')
     pubkey = data.get('pubkey')
     lat = data.get('lat')
     lng = data.get('lng')
@@ -397,12 +405,14 @@ def add_device_route():
     name = (data.get('name') or '').strip()[:80]
     description = (data.get('description') or '').strip()[:200]
 
-    if not device_id or not pubkey:
-        return jsonify({'success': False, 'message': 'Device ID and public key are required.'})
+    if not pubkey:
+        return jsonify({'success': False, 'message': 'Public key is required.'})
 
     pubkey = parse_public_key_pem(pubkey)
     if not pubkey:
         return jsonify({'success': False, 'message': 'Invalid public key (expecting a P-256 public key in PEM format).'})
+
+    device_id = derive_device_id(pubkey)
 
     # Validate max_validations
     try:
@@ -412,38 +422,27 @@ def add_device_route():
     except (TypeError, ValueError):
         max_validations = 1  # Default to 1 if missing or invalid
 
-    # Check if the device_id already exists
+    # The device_id is derived from the pubkey, so a duplicate here means
+    # the same key was registered before — reject rather than overwrite.
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT device_id FROM devices WHERE device_id = ?', (device_id,))
     if cursor.fetchone():
         conn.close()
-        return jsonify({'success': False, 'message': 'Device ID already exists. Please try again.'})
+        return jsonify({'success': False, 'message': 'This public key is already registered.'})
+    conn.close()
 
     try:
-        add_device(device_id, '', lat, lng, max_validations, current_user.username, pubkey,
+        add_device(device_id, lat=lat, lng=lng, max_validations=max_validations,
+                   username=current_user.username, pubkey=pubkey,
                    name=name, description=description)
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'device_id': device_id})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
-    finally:
-        conn.close()
 
-def add_device(device_id, secret='', lat=None, lng=None, max_validations=1, username=None, pubkey=None,
+def add_device(device_id, lat=None, lng=None, max_validations=1, username=None, pubkey=None,
                name='', description=''):
-    """
-    Adds a device to the database.
-
-    :param device_id: Unique ID of the device.
-    :param secret: Unused, accepted only for backward compatibility.
-    :param lat: Latitude of the device's location (optional).
-    :param lng: Longitude of the device's location (optional).
-    :param max_validations: Max validations per signed code.
-    :param username: Username of the user who added the device.
-    :param pubkey: ECDSA P-256 public key in PEM format.
-    :param name: Owner-editable display name (optional).
-    :param description: Owner-editable description (optional).
-    """
+    """Insert a device row. The caller derives device_id from the pubkey."""
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute('''

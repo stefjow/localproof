@@ -36,15 +36,16 @@ def logout(client):
     client.get('/logout')
 
 
-def add_device_with_key(client, device_id='AB12', **extra):
+def add_device_with_key(client, **extra):
+    """Register a fresh device and return (device_id, private_key).
+    The server derives device_id from the pubkey."""
     key = ECC.generate(curve='P-256')
     pem = key.public_key().export_key(format='PEM')
-    body = {'device_id': device_id, 'pubkey': pem, 'lat': DEV_LAT, 'lng': DEV_LNG,
-            'max_validations': 1}
+    body = {'pubkey': pem, 'lat': DEV_LAT, 'lng': DEV_LNG, 'max_validations': 1}
     body.update(extra)
     resp = client.post('/add-device', json=body).get_json()
     assert resp['success'] is True, resp
-    return key
+    return resp['device_id'], key
 
 
 def validate_once(client, device_id, key):
@@ -68,8 +69,8 @@ def test_update_device_requires_login(client):
 
 def test_owner_can_update_name_and_description(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12')
-    resp = client.put('/update-device/AB12',
+    device_id, _ = add_device_with_key(client)
+    resp = client.put(f'/update-device/{device_id}',
                       json={'name': 'Front door', 'description': 'Reception'}).get_json()
     assert resp['success'] is True
     devices = client.get('/api/my-devices').get_json()
@@ -79,8 +80,8 @@ def test_owner_can_update_name_and_description(client):
 
 def test_owner_can_update_max_validations(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12')
-    resp = client.put('/update-device/AB12', json={'max_validations': 7}).get_json()
+    device_id, _ = add_device_with_key(client)
+    resp = client.put(f'/update-device/{device_id}', json={'max_validations': 7}).get_json()
     assert resp['success'] is True
     devices = client.get('/api/my-devices').get_json()
     assert devices[0]['max_validations'] == 7
@@ -88,30 +89,30 @@ def test_owner_can_update_max_validations(client):
 
 def test_owner_toggle_active_hides_from_map(client):
     register_and_login(client, 'alice')
-    key = add_device_with_key(client, 'AB12')
-    validate_once(client, 'AB12', key)  # flips active=TRUE
+    device_id, key = add_device_with_key(client)
+    validate_once(client, device_id, key)  # flips active=TRUE
 
     # active=TRUE -> shows on map
     body = client.get('/').get_data(as_text=True)
-    assert 'AB12' in body
+    assert device_id in body
 
-    resp = client.put('/update-device/AB12', json={'active': False}).get_json()
+    resp = client.put(f'/update-device/{device_id}', json={'active': False}).get_json()
     assert resp['success'] is True
 
     body = client.get('/').get_data(as_text=True)
-    assert 'AB12' not in body  # deactivated devices are hidden
+    assert device_id not in body  # deactivated devices are hidden
 
     # re-activate
-    resp = client.put('/update-device/AB12', json={'active': True}).get_json()
+    resp = client.put(f'/update-device/{device_id}', json={'active': True}).get_json()
     assert resp['success'] is True
     body = client.get('/').get_data(as_text=True)
-    assert 'AB12' in body
+    assert device_id in body
 
 
 def test_max_validations_below_1_is_clamped(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12')
-    resp = client.put('/update-device/AB12', json={'max_validations': 0}).get_json()
+    device_id, _ = add_device_with_key(client)
+    resp = client.put(f'/update-device/{device_id}', json={'max_validations': 0}).get_json()
     assert resp['success'] is True
     devices = client.get('/api/my-devices').get_json()
     assert devices[0]['max_validations'] == 1
@@ -119,10 +120,10 @@ def test_max_validations_below_1_is_clamped(client):
 
 def test_non_owner_cannot_update(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12')
+    device_id, _ = add_device_with_key(client)
     logout(client)
     register_and_login(client, 'bob')
-    resp = client.put('/update-device/AB12', json={'name': 'hijack'}).get_json()
+    resp = client.put(f'/update-device/{device_id}', json={'name': 'hijack'}).get_json()
     assert resp['success'] is False
     assert 'owner' in resp['message'].lower()
 
@@ -135,8 +136,8 @@ def test_update_nonexistent_device(client):
 
 def test_empty_update_rejected(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12')
-    resp = client.put('/update-device/AB12', json={}).get_json()
+    device_id, _ = add_device_with_key(client)
+    resp = client.put(f'/update-device/{device_id}', json={}).get_json()
     assert resp['success'] is False
 
 
@@ -149,20 +150,20 @@ def test_my_devices_requires_login(client):
 
 def test_my_devices_only_shows_own_and_no_pubkey(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'ALICE1')
+    add_device_with_key(client)
     logout(client)
     register_and_login(client, 'bob')
-    add_device_with_key(client, 'BOB1')
+    bob_id, _ = add_device_with_key(client)
 
     devices = client.get('/api/my-devices').get_json()
-    assert [d['device_id'] for d in devices] == ['BOB1']
+    assert [d['device_id'] for d in devices] == [bob_id]
     assert 'pubkey' not in devices[0]
     assert 'secret' not in devices[0]
 
 
 def test_my_devices_includes_metadata(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12', name='My Rig', description='Test bench')
+    add_device_with_key(client, name='My Rig', description='Test bench')
     devices = client.get('/api/my-devices').get_json()
     assert devices[0]['name'] == 'My Rig'
     assert devices[0]['description'] == 'Test bench'
@@ -178,16 +179,16 @@ def test_my_validations_requires_login(client):
 
 def test_my_validations_filters_by_username_and_orders_desc(client):
     register_and_login(client, 'alice')
-    key_a = add_device_with_key(client, 'ALICE1')
-    validate_once(client, 'ALICE1', key_a)
+    alice_id, key_a = add_device_with_key(client)
+    validate_once(client, alice_id, key_a)
     logout(client)
 
     register_and_login(client, 'bob')
-    key_b = add_device_with_key(client, 'BOB1')
-    validate_once(client, 'BOB1', key_b)
+    bob_id, key_b = add_device_with_key(client)
+    validate_once(client, bob_id, key_b)
 
     rows = client.get('/api/my-validations').get_json()
-    assert all(r['device_id'] == 'BOB1' for r in rows)
+    assert all(r['device_id'] == bob_id for r in rows)
     assert all(r['status'] == 'success' for r in rows)
     timestamps = [r['timestamp'] for r in rows]
     assert timestamps == sorted(timestamps, reverse=True)
@@ -197,7 +198,7 @@ def test_my_validations_filters_by_username_and_orders_desc(client):
 
 def test_add_device_accepts_optional_metadata(client):
     register_and_login(client, 'alice')
-    add_device_with_key(client, 'AB12', name='Front door', description='Reception')
+    add_device_with_key(client, name='Front door', description='Reception')
     devices = client.get('/api/my-devices').get_json()
     assert devices[0]['name'] == 'Front door'
     assert devices[0]['description'] == 'Reception'
