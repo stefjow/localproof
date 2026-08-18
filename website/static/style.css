@@ -182,16 +182,26 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content { max-width: 340px; }
 .popup-scroll { max-height: 200px; overflow-y: auto; margin-top: 6px; }
 .popup-links { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 13px; }
-.popup-content .register-form { display: flex; flex-direction: column; gap: 6px; }
-.popup-content .register-form > button { margin-top: 8px; }
-.popup-content label { display: grid; gap: 3px; font-size: 12px; color: var(--text-muted); }
+/* Both classes sit on the same element, so this needs the compound
+   selector (.popup-content.register-form), not a descendant combinator. */
+.popup-content.register-form { display: flex; flex-direction: column; gap: 10px; }
+.popup-content label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
 .popup-content input,
 .popup-content textarea {
-  width: 100%; padding: 6px 8px; background: rgba(255,255,255,0.06); color: var(--text);
+  width: 100%; padding: 7px 9px; background: rgba(255,255,255,0.05); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px; font-family: var(--font); font-size: 13px;
   min-height: 36px;
 }
-.popup-content textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 84px; }
+.popup-content input::placeholder,
+.popup-content textarea::placeholder { color: rgba(154, 164, 173, 0.55); }
+.popup-content input:focus,
+.popup-content textarea:focus {
+  outline: none; border-color: var(--accent); background: rgba(255,255,255,0.08);
+}
+.popup-content textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; line-height: 1.45; min-height: 72px; resize: vertical;
+}
 .popup-content button { padding: 8px 12px; font-family: var(--font); font-size: 13px;
   background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; cursor: pointer; min-height: 44px; }
@@ -199,10 +209,20 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content button:disabled { opacity: 0.35; cursor: not-allowed; }
 .popup-content a { color: var(--accent); }
 
+/* Generate / Register sit side by side, with clear air above them. */
+.register-actions { display: flex; gap: 8px; margin-top: 6px; }
+.register-actions button { flex: 1; }
+.register-actions #reg-register-btn:not(:disabled) {
+  background: rgba(0, 97, 100, 0.4); border-color: rgba(0, 97, 100, 0.7);
+}
+.register-actions #reg-register-btn:hover:not(:disabled) { background: rgba(0, 97, 100, 0.55); }
+#reg-privkey-box { display: grid; gap: 4px; font-size: 12px; }
+
 /* "From a connected device" — WebSerial + ESP Web Tools helpers */
 .from-device-section {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 8px; border: 1px dashed var(--border); border-radius: 6px;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; border: 1px dashed var(--border); border-radius: 6px;
+  background: rgba(255,255,255,0.02);
 }
 .from-device-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 .from-device-hint { font-size: 11px; color: var(--text-muted); line-height: 1.35; }

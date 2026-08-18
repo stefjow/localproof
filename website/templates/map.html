@@ -331,12 +331,14 @@
                         <label>Public key (PEM)
                             <textarea id="reg-pubkey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----&#10;auto-filled from the device, or generate below" oninput="updateRegisterState(this.closest('.register-form'))"></textarea>
                         </label>
-                        <button type="button" id="reg-generate-btn" onclick="generateBrowserKeypair()">Generate keypair in browser</button>
                         <div id="reg-privkey-box" style="display:none;">
                             <strong>Private key — copy it now, it is not stored anywhere:</strong>
                             <textarea id="reg-privkey" rows="5" readonly onclick="this.select()"></textarea>
                         </div>
-                        <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
+                        <div class="register-actions">
+                            <button type="button" id="reg-generate-btn" onclick="generateBrowserKeypair()">Generate keypair</button>
+                            <button type="button" id="reg-register-btn" disabled onclick="registerDevice(this)">Register Device</button>
+                        </div>
                     </div>
                 `)
                 .addTo(map);
@@ -426,7 +428,7 @@
             const pubkeyEl = document.getElementById('reg-pubkey');
             pubkeyEl.value = pemEncode(pub, 'PUBLIC KEY');
             document.getElementById('reg-privkey').value = pemEncode(priv, 'PRIVATE KEY');
-            document.getElementById('reg-privkey-box').style.display = 'block';
+            document.getElementById('reg-privkey-box').style.display = 'grid';
             updateRegisterState(pubkeyEl.closest('.register-form'));
         }
 
