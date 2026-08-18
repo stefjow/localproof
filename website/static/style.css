@@ -188,42 +188,74 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-content button:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
 .popup-content a { color: var(--accent); }
 
-/* -- Drawers ------------------------------------------------------------- */
-/* Every panel (devices, validations, add device) slides in from the side and
-   leaves the map visible instead of covering it — Add Device included, since
-   its flow flies the map to the device's GPS fix. */
-/* No scrim and no pointer capture: the map stays fully interactive beside an
-   open panel, so you can pan it and drag pins while registering or editing. */
-.drawer-backdrop {
-  position: fixed; inset: 0; z-index: 1090;
-  display: flex; justify-content: flex-end;
+/* -- Side rail ----------------------------------------------------------- */
+/* The auth card and the panels are one floating card on the right: collapsed
+   it is just the auth card, expanded it grows to full height with the nav
+   pinned at the top. It never captures the map — pointer-events stay off the
+   container so panning and dragging pins works with a panel open. */
+#side-rail {
+  position: fixed; top: 12px; right: 12px; z-index: 1000;
+  display: flex; flex-direction: column;
+  max-width: calc(100vw - 24px);
   pointer-events: none;
 }
-.drawer-backdrop[hidden] { display: none; }
-.drawer {
-  pointer-events: auto;
-  display: flex; flex-direction: column;
-  width: 100%; max-width: 620px; height: 100%;
-  background: var(--panel); border-left: 1px solid var(--panel-border);
-  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.55);
+#side-rail > * { pointer-events: auto; }
+#side-rail.expanded { width: 520px; bottom: 12px; }
+
+/* Inside the rail the auth panel is a header, not its own floating box. */
+#side-rail #auth-panel { position: static; max-width: none; flex: none; }
+#side-rail.expanded #user-info {
+  border-radius: 8px 8px 0 0; border-bottom: none;
 }
-.drawer-head {
+
+.rail-body {
+  display: flex; flex-direction: column; min-height: 0; flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--panel-border); border-top: none;
+  border-radius: 0 0 8px 8px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+.rail-body[hidden] { display: none; }
+.rail-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 20px; border-bottom: 1px solid var(--border); flex: none;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex: none;
 }
-.drawer-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
-.drawer-close {
+.rail-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.rail-close {
   background: none; border: none; color: var(--text-muted);
-  font-size: 24px; line-height: 1; padding: 0 4px; cursor: pointer;
+  font-size: 22px; line-height: 1; padding: 0 4px; cursor: pointer;
 }
-.drawer-close:hover { color: var(--text); }
-.drawer-body { padding: 20px; overflow-y: auto; flex: 1; }
-.drawer-body .hint { color: var(--text-muted); margin: 0 0 16px; font-size: 13px; }
-.drawer-body .device-card:last-child { margin-bottom: 0; }
-@media (max-width: 680px) {
-  .drawer { max-width: none; }
-  .drawer-body { padding: 14px; }
-  .device-meta { grid-template-columns: 1fr; }
+.rail-close:hover { color: var(--text); }
+.rail-content { padding: 16px; overflow-y: auto; flex: 1; min-height: 0; }
+.rail-content .hint { color: var(--text-muted); margin: 0 0 14px; font-size: 13px; }
+.rail-content .device-card:last-child { margin-bottom: 0; }
+.rail-content .device-card { padding: 14px 16px; }
+.rail-content .device-meta { grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.auth-nav a.active { color: var(--accent); font-weight: 600; }
+
+/* The rail is too narrow for a five-column table, so rows stack into
+   labelled lines using each cell's data-label. */
+.rail-content .validations-table { border: none; background: none; border-radius: 0; }
+.rail-content .validations-table thead { display: none; }
+.rail-content .validations-table tbody tr {
+  display: block; padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.rail-content .validations-table td {
+  display: grid; grid-template-columns: 120px 1fr; gap: 10px;
+  padding: 2px 0; border: none; font-size: 13px;
+}
+.rail-content .validations-table td::before {
+  content: attr(data-label);
+  color: var(--text-muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; align-self: center;
+}
+
+@media (max-width: 620px) {
+  #side-rail.expanded { width: auto; left: 12px; }
+  .rail-content { padding: 12px; }
+  .rail-content .device-meta { grid-template-columns: 1fr; }
+  .rail-content .validations-table td { grid-template-columns: 100px 1fr; }
 }
 /* -- Register form (inside the Add Device drawer) ------------------------ */
 .register-form { display: flex; flex-direction: column; gap: 18px; }
