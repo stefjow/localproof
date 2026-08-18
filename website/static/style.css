@@ -183,6 +183,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .popup-scroll { max-height: 200px; overflow-y: auto; margin-top: 6px; }
 .popup-links { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 13px; }
 .popup-content .register-form { display: flex; flex-direction: column; gap: 6px; }
+.popup-content .register-form > button { margin-top: 8px; }
 .popup-content label { display: grid; gap: 3px; font-size: 12px; color: var(--text-muted); }
 .popup-content input,
 .popup-content textarea {
