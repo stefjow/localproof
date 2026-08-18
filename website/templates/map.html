@@ -375,32 +375,30 @@
         // being its own page, so /my-devices and /my-validations redirect here
         // with ?devices=1 / ?validations=1. Add Device is a drawer too: its
         // flow flies the map to the device's GPS fix, which is worth watching.
+        // Panels do not capture the map, so there is no backdrop to click:
+        // the x button and Escape close them. That also means an in-flight
+        // serial read can no longer be cancelled by a stray click.
         const DRAWERS = {
-            'devices-drawer': { load: () => loadDevices(), dismissible: true },
-            'validations-drawer': { load: () => loadValidations(), dismissible: true },
-            // Not dismissible by backdrop click: closing cancels an in-flight
-            // serial read, and a cold GPS fix can be a long wait to lose.
-            'add-device-drawer': { load: () => resetAddDeviceForm(), dismissible: false },
+            'devices-drawer': () => loadDevices(),
+            'validations-drawer': () => loadValidations(),
+            'add-device-drawer': () => resetAddDeviceForm(),
         };
 
         function openDrawer(id) {
             closeAllOverlays();
-            DRAWERS[id].load();
+            DRAWERS[id]();
             document.getElementById(id).hidden = false;
         }
 
         function closeDrawer(id) {
-            if (id === 'add-device-drawer' && currentRead) currentRead.cancel();
+            if (id === 'add-device-drawer') {
+                if (currentRead) currentRead.cancel();
+                clearPendingPin();
+            }
             document.getElementById(id).hidden = true;
         }
 
         function closeAllOverlays() { Object.keys(DRAWERS).forEach(closeDrawer); }
-
-        for (const [id, cfg] of Object.entries(DRAWERS)) {
-            if (!cfg.dismissible) continue;
-            const el = document.getElementById(id);
-            el.addEventListener('click', (e) => { if (e.target === el) closeDrawer(id); });
-        }
 
         // Re-render the drawer list and resync the map after any device
         // mutation, so pins follow edits without a full page reload.
@@ -410,9 +408,32 @@
             loadInactiveDevices();
         }
 
+        // The panel does not cover the map, so keep it open while we fly.
         function showDeviceOnMap(lat, lng) {
-            closeDrawer('devices-drawer');
             map.flyTo({ center: [lng, lat], zoom: 15 });
+        }
+
+        // Preview pin for a device being registered: dropped at the position
+        // the device reported, draggable so the spot can be nudged before it
+        // is committed (a GPS fix through a window can be off by a house).
+        let pendingPin = null;
+
+        function setPendingPin(lat, lng) {
+            clearPendingPin();
+            pendingPin = new maplibregl.Marker({ color: '#ffd54a', draggable: true })
+                .setLngLat([lng, lat])
+                .addTo(map);
+            pendingPin.on('dragend', () => {
+                const p = pendingPin.getLngLat();
+                const form = document.getElementById('add-device-form');
+                form.dataset.lat = p.lat;
+                form.dataset.lng = p.lng;
+                updateRegisterState(form);
+            });
+        }
+
+        function clearPendingPin() {
+            if (pendingPin) { pendingPin.remove(); pendingPin = null; }
         }
 
         // Active pins are server-rendered by the Jinja loop, so after an edit
@@ -450,6 +471,7 @@
             const info = document.getElementById('reg-device-info');
             info.className = 'from-device-info';
             info.textContent = '';
+            clearPendingPin();
             updateRegisterState(form);
         }
 
@@ -529,7 +551,7 @@
             const fixRow = form.querySelector('#reg-status-fix');
             fixRow.classList.toggle('done', hasFix);
             fixRow.textContent = hasFix
-                ? `GPS position ${(+form.dataset.lat).toFixed(5)}, ${(+form.dataset.lng).toFixed(5)}`
+                ? `GPS position ${(+form.dataset.lat).toFixed(5)}, ${(+form.dataset.lng).toFixed(5)} — drag the pin to adjust`
                 : 'GPS position';
         }
 
@@ -644,7 +666,8 @@
                             gotFix = true;
                             updateRegisterState(form);
                             info.textContent = `Device id: ${deviceId} — ready to register.`;
-                            map.flyTo({ center: [dLng, dLat], zoom: 15 });
+                            setPendingPin(dLat, dLng);
+                            map.flyTo({ center: [dLng, dLat], zoom: 17 });
                         }
                     }
                     if (gotPubkey && gotFix) break;

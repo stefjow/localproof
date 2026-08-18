@@ -192,17 +192,20 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Every panel (devices, validations, add device) slides in from the side and
    leaves the map visible instead of covering it — Add Device included, since
    its flow flies the map to the device's GPS fix. */
+/* No scrim and no pointer capture: the map stays fully interactive beside an
+   open panel, so you can pan it and drag pins while registering or editing. */
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 1090;
-  background: rgba(0, 0, 0, 0.45);
   display: flex; justify-content: flex-end;
+  pointer-events: none;
 }
 .drawer-backdrop[hidden] { display: none; }
 .drawer {
+  pointer-events: auto;
   display: flex; flex-direction: column;
   width: 100%; max-width: 620px; height: 100%;
   background: var(--panel); border-left: 1px solid var(--panel-border);
-  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.55);
 }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
