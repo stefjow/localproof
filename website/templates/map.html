@@ -108,17 +108,16 @@
     <script>
         // MapLibre GL: raster tiles from CARTO dark_all give us native dark
         // tiles (no CSS-filter hack), and globe projection turns it into a globe.
+        // The key comes from CARTO_API_KEY in .env; without it CARTO stamps
+        // every tile with a watermark.
+        const cartoKey = {{ carto_api_key|tojson }};
+        const cartoTile = (s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png` + (cartoKey ? `?key=${cartoKey}` : '');
         const cartoDarkStyle = {
             version: 8,
             sources: {
                 carto: {
                     type: 'raster',
-                    tiles: [
-                        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                        'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                    ],
+                    tiles: ['a', 'b', 'c', 'd'].map(cartoTile),
                     tileSize: 256,
                     attribution: '© <a href="https://carto.com/attributions">CARTO</a>',
                 }

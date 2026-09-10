@@ -63,7 +63,7 @@ python create_database.py
 python app.py         # http://localhost:5005
 ```
 
-For production, set `SECRET_KEY` in `website/.env` and run under gunicorn:
+For production, set `SECRET_KEY` and `CARTO_API_KEY` (basemap tiles, see `website/.env.example`) in `website/.env` and run under gunicorn:
 
 ```bash
 gunicorn -w 2 -b 127.0.0.1:5005 app:app

@@ -17,6 +17,17 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY')
+
+# CARTO basemap tiles are watermarked "API KEY REQUIRED" without a key
+# (enforced since late August 2026). Free keys: https://carto.com/basemaps/apikey
+CARTO_API_KEY = os.environ.get('CARTO_API_KEY', '')
+if not CARTO_API_KEY:
+    print("WARNING: CARTO_API_KEY not set, basemap tiles will be watermarked. Set it in .env.")
+
+
+@app.context_processor
+def inject_basemap_key():
+    return {'carto_api_key': CARTO_API_KEY}
 if not app.secret_key:
     # Random fallback keeps the app safe to run without a .env, but sessions
     # won't survive restarts and multi-worker deployments need a fixed key.
