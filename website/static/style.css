@@ -8,7 +8,7 @@
   --danger: #db4325;
   --success: #006164;
   --border: rgba(255, 255, 255, 0.08);
-  --font: "Helvetica Neue", Arial, Helvetica, sans-serif;
+  --font: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -51,7 +51,7 @@ body.page-map .maplibregl-canvas { outline: none; }
   color: var(--text);
   padding: 12px;
   border: 1px solid var(--panel-border);
-  border-radius: 8px;
+  border-radius: 12px;
   backdrop-filter: blur(6px);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   font-size: 13px;
@@ -71,7 +71,7 @@ body.page-map .maplibregl-canvas { outline: none; }
   min-height: 40px;
 }
 #login-form input:focus,
-button:focus,
+button:focus-visible,
 select:focus,
 textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .login-buttons { display: flex; gap: 8px; }
@@ -90,10 +90,46 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 #login-form button:hover,
 #user-info button:hover { background: rgba(255,255,255,0.14); }
-.user-info-line { margin-bottom: 8px; }
-.user-name { color: var(--accent); font-weight: 600; }
-.auth-nav { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; }
-.auth-nav a { padding: 4px 0; }
+/* Logged-in header: a user chip, the panel pills, and Logout at the far end. */
+.user-chip { display: flex; align-items: center; min-width: 0; padding-left: 4px; }
+.user-name {
+  color: var(--text); font-weight: 600; font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* One panel is open at a time, so the nav is a segmented control: one
+   bordered group, the open panel is the filled segment. */
+.auth-nav {
+  display: flex; padding: 3px; gap: 2px; border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.auth-nav a {
+  display: inline-flex; align-items: center;
+  padding: 0 12px; min-height: 26px; border-radius: 6px;
+  font-size: 12.5px; font-weight: 500; white-space: nowrap;
+  color: var(--text-muted); text-decoration: none;
+  transition: background 0.12s, color 0.12s;
+}
+.auth-nav a:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.auth-nav a.active { color: #0a0d10; background: var(--accent); font-weight: 600; }
+.auth-logout {
+  flex: none; font-size: 12.5px; color: var(--text-muted); text-decoration: none;
+  padding: 6px 2px; white-space: nowrap;
+}
+.auth-logout:hover { color: var(--text); }
+/* Desktop: the menu wrapper is just a row holding the pills and Logout. */
+.nav-menu { display: flex; align-items: center; gap: 12px; margin-left: auto; min-width: 0; }
+#user-info .nav-toggle {
+  display: none; flex: none; width: 36px; height: 36px; min-height: 0; padding: 0;
+  align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px; color: var(--text); cursor: pointer;
+}
+.nav-toggle:hover { background: rgba(255, 255, 255, 0.1); }
+/* The icon stays three lines; the open state shows on the button itself. */
+#user-info .nav-toggle { transition: background 0.12s, border-color 0.12s, color 0.12s; }
+#user-info.menu-open .nav-toggle {
+  color: #b9eef0; background: rgba(79, 176, 180, 0.18); border-color: rgba(79, 176, 180, 0.6);
+}
 
 /* -- Device management (cards + edit form) ------------------------------ */
 .device-card {
@@ -199,30 +235,24 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 #side-rail > * { pointer-events: auto; }
 /* Width is fixed in both states so opening a panel only grows the card
    downward — the nav is laid out horizontally to fill it. */
-#side-rail.authed { width: 520px; }
+#side-rail.authed { width: 540px; }
 #side-rail.expanded { bottom: 12px; }
 
 /* Inside the rail the auth panel is a header, not its own floating box. */
 #side-rail #auth-panel { position: static; max-width: none; flex: none; }
 #side-rail.expanded #user-info {
-  border-radius: 8px 8px 0 0; border-bottom: none;
+  border-radius: 12px 12px 0 0; border-bottom: none;
 }
 #side-rail.authed #user-info {
-  display: flex; align-items: center; gap: 14px; padding: 9px 14px;
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 10px;
 }
-#side-rail.authed .user-info-line {
-  margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-#side-rail.authed .auth-nav {
-  margin-left: auto; flex-wrap: nowrap; gap: 14px; font-size: 12.5px;
-}
-#side-rail.authed .auth-nav a { padding: 2px 0; white-space: nowrap; }
+#side-rail.authed .auth-nav { flex-wrap: nowrap; }
 
 .rail-body {
   display: flex; flex-direction: column; min-height: 0; flex: 1;
   background: var(--panel);
   border: 1px solid var(--panel-border); border-top: none;
-  border-radius: 0 0 8px 8px;
+  border-radius: 0 0 12px 12px;
   backdrop-filter: blur(6px);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
@@ -245,7 +275,6 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rail-content .device-card:last-child { margin-bottom: 0; }
 .rail-content .device-card { padding: 14px 16px; }
 .rail-content .device-meta { grid-template-columns: 1fr 1fr; gap: 8px 16px; }
-.auth-nav a.active { color: var(--accent); font-weight: 600; }
 
 /* The rail is too narrow for a five-column table, so rows stack into
    labelled lines using each cell's data-label. */
@@ -268,8 +297,27 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   #side-rail { top: 8px; right: 8px; }
   #side-rail.authed { width: auto; }
   #side-rail.expanded { left: 8px; bottom: 8px; }
-  #side-rail.authed #user-info { flex-wrap: wrap; }
-  #side-rail.authed .auth-nav { margin-left: 0; flex-wrap: wrap; }
+  /* Phone: the header is one full-width bar in both states (name left,
+     burger right), so it never changes shape when a panel opens below it. */
+  #side-rail.authed { left: 8px; width: auto; }
+  #side-rail.authed #user-info { position: relative; gap: 10px; padding: 8px 8px 8px 10px; }
+  #side-rail.authed .user-chip { flex: 1; }
+  #user-info .nav-toggle { display: inline-flex; }
+  /* The menu is its own card hanging under the burger. It floats over
+     whatever is below rather than pushing it down, so it looks the same
+     with or without a panel open. */
+  .nav-menu {
+    display: none; position: absolute; top: calc(100% + 6px); right: 8px; z-index: 2;
+    width: 240px; margin: 0; padding: 6px; flex-direction: column; align-items: stretch; gap: 2px;
+    background: rgba(20, 24, 28, 0.98); border: 1px solid var(--panel-border); border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
+  .menu-open .nav-menu { display: flex; }
+  #side-rail.authed .auth-nav {
+    flex-direction: column; gap: 2px; padding: 0; background: none; border: none;
+  }
+  .auth-nav a { padding: 0 12px; border-radius: 8px; font-size: 14px; color: var(--text); }
+  .auth-logout { padding: 0 12px; font-size: 14px; border-top: 1px solid var(--border); border-radius: 0; margin-top: 4px; }
   #login-form, #user-info { min-width: 0; width: 100%; }
   .rail-content { padding: 12px; }
   .rail-content .device-meta { grid-template-columns: 1fr; }
@@ -281,11 +329,11 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   input, textarea, select { font-size: 16px; }
 }
 
-/* Touch targets: the nav links are ~17px tall for a mouse, which is fine,
-   but they wrap into stacked rows on a phone where that invites mis-taps. */
+/* Touch targets: 26px segments are fine for a mouse, not for a thumb. */
 @media (pointer: coarse) {
-  .auth-nav { gap: 2px 18px; }
-  .auth-nav a { min-height: 40px; display: inline-flex; align-items: center; }
+  .auth-nav a { min-height: 42px; }
+  .auth-logout { min-height: 42px; display: inline-flex; align-items: center; }
+  #user-info .nav-toggle { width: 40px; height: 40px; }
 }
 /* -- Register form (inside the Add Device drawer) ------------------------ */
 .register-form { display: flex; flex-direction: column; gap: 18px; }

@@ -3,18 +3,30 @@
 <div id="auth-panel">
   {% if current_user.is_authenticated %}
     <div id="user-info">
-      <div class="user-info-line">
-        Logged in as <span class="user-name">{{ current_user.username }}</span>
+      <div class="user-chip" title="Logged in as {{ current_user.username }}">
+        <span class="user-name">{{ current_user.username }}</span>
       </div>
+      {# Phone only: the nav and Logout fold into a menu under this button. #}
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu"
+              aria-expanded="false" aria-controls="nav-menu" onclick="toggleNavMenu()">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <line x1="4" y1="7" x2="20" y2="7"/>
+          <line x1="4" y1="12" x2="20" y2="12"/>
+          <line x1="4" y1="17" x2="20" y2="17"/>
+        </svg>
+      </button>
       {# The map is the app shell: these open overlays on it. Real hrefs keep
          them working from the inner pages (device history), where they
          navigate to the map and it opens the overlay on arrival. #}
-      <nav class="auth-nav">
-        <a id="nav-my-devices" href="/?devices=1">My Devices</a>
-        <a id="nav-my-validations" href="/?validations=1">My Validations</a>
-        <a id="nav-add-device" href="/?add=1">Add Device</a>
-        <a href="#" onclick="logout(); return false;">Logout</a>
-      </nav>
+      <div class="nav-menu" id="nav-menu">
+        <nav class="auth-nav">
+          <a id="nav-my-devices" href="/?devices=1">Devices</a>
+          <a id="nav-my-validations" href="/?validations=1">Validations</a>
+          <a id="nav-add-device" href="/?add=1">Add Device</a>
+        </nav>
+        <a href="#" class="auth-logout" onclick="logout(); return false;">Logout</a>
+      </div>
     </div>
   {% else %}
     <div id="login-form">
@@ -54,6 +66,21 @@
     if (data.success) { alert('Registration successful. Please log in.'); }
     else { alert(data.error || 'Registration failed'); }
   }
+  // Phone burger: the menu is a plain class toggle; picking an entry closes it.
+  function toggleNavMenu(force) {
+    const info = document.getElementById('user-info');
+    const open = info.classList.toggle('menu-open', force);
+    document.getElementById('nav-toggle').setAttribute('aria-expanded', open);
+  }
+  document.querySelectorAll('#nav-menu a').forEach(a => {
+    a.addEventListener('click', () => toggleNavMenu(false));
+  });
+  // Tapping anywhere outside the header closes the menu (it floats over the
+  // page, so nothing else would).
+  document.addEventListener('pointerdown', (e) => {
+    const info = document.getElementById('user-info');
+    if (info.classList.contains('menu-open') && !info.contains(e.target)) toggleNavMenu(false);
+  });
   async function logout() {
     const r = await fetch('/logout');
     const data = await r.json();

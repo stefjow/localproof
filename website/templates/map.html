@@ -4,6 +4,9 @@
     <meta charset="utf-8">
     <title>LOCALPROOF: MAP</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap">
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="/static/style.css">
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
@@ -142,7 +145,10 @@
             zoom: ACTIVE_DEVICES.length === 1 ? 13 : 1.2,
             attributionControl: { compact: true },
         });
-        map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+        // On a phone the rail spans the top of the screen, so the zoom
+        // buttons go bottom-left where they are also under the thumb.
+        const phone = window.matchMedia('(max-width: 640px)').matches;
+        map.addControl(new maplibregl.NavigationControl({ showCompass: false }), phone ? 'bottom-left' : 'top-left');
         map.on('style.load', () => { map.setProjection({ type: 'globe' }); });
 
         const markers = [];
@@ -415,8 +421,8 @@
             // Public — reachable from any device's map popup.
             'history-drawer':     { title: 'Device History', nav: null, load: () => {} },
             {% if current_user.is_authenticated %}
-            'devices-drawer':     { title: 'My Devices',     nav: 'nav-my-devices',     load: () => loadDevices() },
-            'validations-drawer': { title: 'My Validations', nav: 'nav-my-validations', load: () => loadValidations() },
+            'devices-drawer':     { title: 'Devices',        nav: 'nav-my-devices',     load: () => loadDevices() },
+            'validations-drawer': { title: 'Validations',    nav: 'nav-my-validations', load: () => loadValidations() },
             'add-device-drawer':  { title: 'Add Device',     nav: 'nav-add-device',     load: () => resetAddDeviceForm() },
             {% endif %}
         };
@@ -469,7 +475,9 @@
         }
 
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeAllOverlays();
+            if (e.key !== 'Escape') return;
+            closeAllOverlays();
+            if (typeof toggleNavMenu === 'function') toggleNavMenu(false);
         });
 
         {% if current_user.is_authenticated %}
