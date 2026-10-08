@@ -1,9 +1,12 @@
-{# Proximity tokens: the owner's list (revoke) and the add flow (install
-   firmware, read the key over WebSerial, register). Rendered client-side
-   from /api/my-tokens; loadTokens() is called by the drawer opener. #}
+{# Proximity tokens: the owner's list (revoke), the add flow (install
+   firmware, read the key over WebSerial, register) and the token's Wi-Fi
+   networks (sent over WebSerial, never to the server). Rendered
+   client-side from /api/my-tokens; loadTokens() is called by the drawer
+   opener. #}
 <p class="hint">
   A token is a small ESP32 you carry. Next to a station it answers timed
   radio challenges, and your validations there count as proximity-verified.
+  With Wi-Fi set up it uploads the proof itself, so you don't need to scan.
 </p>
 <div id="tokens-empty" class="empty" style="display:none;">You haven't registered any tokens yet.</div>
 <div id="tokens-list"></div>
@@ -34,9 +37,9 @@
         <span slot="not-allowed">Open this page over HTTPS to install.</span>
       </esp-web-install-button>
       <div class="from-device-hint">
-        Erasing the board gives the token a new key, so a reinstalled token
-        has to be registered again. If the install fails, hold BOOT while
-        clicking Install.
+        Erasing the board gives the token a new key and forgets its Wi-Fi,
+        so a reinstalled token has to be registered again. If the install
+        fails, hold BOOT while clicking Install.
       </div>
       <button type="button" onclick="readTokenKey(this)">Read from token</button>
       <div id="token-info" class="from-device-info"></div>
@@ -52,6 +55,26 @@
   </div>
   <div class="register-actions">
     <button type="button" id="token-register-btn" disabled onclick="registerToken(this)">Register Token</button>
+  </div>
+</div>
+
+<div class="register-form" id="token-wifi-form">
+  <div class="reg-section">
+    <div class="reg-section-title">Token Wi-Fi</div>
+    <div class="from-device-hint">
+      Networks the token uploads its proofs over, e.g. your home Wi-Fi and
+      your phone's hotspot (up to 3). They are written to the token over
+      USB and never sent to this site. Works for any connected token.
+    </div>
+    <div id="token-wifi-networks" class="from-device-info"></div>
+    <label>Network name (SSID)<input type="text" id="token-wifi-ssid" maxlength="32" autocomplete="off"></label>
+    <label>Password<input type="password" id="token-wifi-pass" maxlength="63" autocomplete="new-password"
+                          placeholder="empty for an open network"></label>
+    <div class="from-device-section">
+      <button type="button" onclick="saveTokenWifi(this)">Save to token</button>
+      <button type="button" onclick="forgetTokenWifi(this)">Forget all networks</button>
+    </div>
+    <div id="token-wifi-info" class="from-device-info"></div>
   </div>
 </div>
 
@@ -80,6 +103,7 @@ async function revokeToken(tokenId) {
 
 function resetAddTokenForm() {
   document.getElementById('token-pubkey').value = '';
+  for (const id of ['token-wifi-networks', 'token-wifi-info']) document.getElementById(id).textContent = '';
   document.querySelector('#add-token-form .reg-pem').open = false;
   const info = document.getElementById('token-info');
   info.className = 'from-device-info';
@@ -93,36 +117,37 @@ function updateTokenRegisterState() {
   document.getElementById('token-status-key').classList.toggle('done', hasKey);
 }
 
-// The token prints "Token ID: <id> (...)" and "Pubkey: <X||Y hex>" at boot.
-// Unlike a station there is no GPS fix to wait for, so the read ends as
-// soon as the key arrives. Same reset caveat as readFromDevice: no
-// port.setSignals(), the user presses RESET.
+// Talking to the token over USB. The port is kept after the first pick so
+// the browser asks only once per page.
+let tokenPort = null;
 let currentTokenRead = null;
 
-async function readTokenKey(button) {
-  if (currentTokenRead) { currentTokenRead.cancel(); return; }
-  const info = document.getElementById('token-info');
-  let port;
+// Opens the port, sends `command` (if any) and passes each line to onLine
+// until it returns true or timeoutMs passes. Resolves to whether onLine
+// finished it. Throws if the port can't be opened or the connection drops.
+async function tokenSerial(command, onLine, timeoutMs) {
+  if (!tokenPort) tokenPort = await navigator.serial.requestPort();
   try {
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
+    await tokenPort.open({ baudRate: 115200 });
   } catch (err) {
-    if (err.name !== 'NotFoundError') alert('Could not open serial port: ' + err.message);
-    return;
+    tokenPort = null;  // unplugged or taken: pick again next time
+    throw err;
   }
-  info.className = 'from-device-info action';
-  info.textContent = 'Press the RESET (or EN) button on the token now.';
-
+  const port = tokenPort;
   const decoder = new TextDecoderStream();
   const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
   const reader = decoder.readable.getReader();
-  const timer = setTimeout(() => { reader.cancel().catch(() => {}); }, 60000);
+  const timer = setTimeout(() => { reader.cancel().catch(() => {}); }, timeoutMs);
   currentTokenRead = { cancel: () => reader.cancel().catch(() => {}) };
-  button.textContent = 'Stop';
 
-  let buffer = '', tokenId = '', gotKey = false, readError = null;
+  let buffer = '', finished = false, readError = null;
   try {
-    while (!gotKey) {
+    if (command) {
+      const writer = port.writable.getWriter();
+      await writer.write(new TextEncoder().encode(command + '\n'));
+      writer.releaseLock();
+    }
+    while (!finished) {
       let value, done;
       try { ({ value, done } = await reader.read()); }
       catch (err) { readError = err; break; }
@@ -132,19 +157,7 @@ async function readTokenKey(button) {
       while ((idx = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
-        let m;
-        if ((m = line.match(/^Token ID:\s*([0-9a-fA-F]{8})/))) {
-          tokenId = m[1];
-          info.className = 'from-device-info';
-          info.textContent = `Token id: ${tokenId} — waiting for pubkey…`;
-        } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
-          document.getElementById('token-pubkey').value = await xyHexToPem(m[1]);
-          gotKey = true;
-          updateTokenRegisterState();
-          info.className = 'from-device-info';
-          info.textContent = `Token id: ${tokenId || '?'} — ready to register.`;
-          break;
-        }
+        if (await onLine(line)) { finished = true; break; }
       }
     }
   } finally {
@@ -154,12 +167,123 @@ async function readTokenKey(button) {
     try { await port.close(); } catch (e) {}
     currentTokenRead = null;
   }
-  button.textContent = gotKey ? 'Read again' : 'Read from token';
-  if (readError) {
-    info.textContent = `Serial connection lost (${readError.name}). Unplug and replug the USB cable, then try again.`;
-  } else if (!gotKey) {
-    info.textContent = 'No Pubkey: line arrived. Click Read from token and press RESET on the token.';
+  if (readError) throw readError;
+  return finished;
+}
+
+function serialFailed(info, err) {
+  info.className = 'from-device-info';
+  if (err.name === 'NotFoundError') { info.textContent = ''; return; }  // picker cancelled
+  info.textContent = `Serial connection failed (${err.message || err.name}). Unplug and replug the USB cable, then try again.`;
+}
+
+function showTokenNetworks(networks) {
+  document.getElementById('token-wifi-networks').textContent = networks.length
+    ? `Networks on this token: ${networks.join(', ')}`
+    : 'No Wi-Fi networks saved on this token yet.';
+}
+
+// The token answers "status" with "Token ID: <id> (...)", "Pubkey: <X||Y
+// hex>", one "Network: <ssid>" per saved network and "Stored codes: <n>".
+// It prints the same at boot, so RESET also works (and is the only way
+// with firmware older than the status command).
+async function readTokenKey(button) {
+  if (currentTokenRead) { currentTokenRead.cancel(); return; }
+  const info = document.getElementById('token-info');
+  let tokenId = '', gotKey = false, networks = [];
+  button.textContent = 'Stop';
+  info.className = 'from-device-info action';
+  info.textContent = 'Reading… if nothing appears, press the RESET (or EN) button on the token.';
+  try {
+    await tokenSerial('status', async line => {
+      let m;
+      if ((m = line.match(/^Token ID:\s*([0-9a-fA-F]{8})/))) {
+        tokenId = m[1];
+        networks = [];
+      } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
+        document.getElementById('token-pubkey').value = await xyHexToPem(m[1]);
+        gotKey = true;
+        updateTokenRegisterState();
+      } else if ((m = line.match(/^Network:\s*(.+)$/))) {
+        networks.push(m[1]);
+      }
+      return gotKey && /^(Stored codes:|Waiting for a station)/.test(line);
+    }, 60000);
+  } catch (err) {
+    button.textContent = 'Read from token';
+    serialFailed(info, err);
+    return;
   }
+  button.textContent = gotKey ? 'Read again' : 'Read from token';
+  info.className = 'from-device-info';
+  if (gotKey) {
+    info.textContent = `Token id: ${tokenId || '?'} — ready to register.`;
+    showTokenNetworks(networks);
+  } else {
+    info.textContent = 'No key arrived. Click Read from token and press RESET on the token.';
+  }
+}
+
+// SSID and password go to the token as hex, which keeps spaces and other
+// characters out of the command syntax. Never sent to the server.
+function toHex(text) {
+  return Array.from(new TextEncoder().encode(text), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function saveTokenWifi(button) {
+  const ssid = document.getElementById('token-wifi-ssid').value;
+  const pass = document.getElementById('token-wifi-pass').value;
+  const info = document.getElementById('token-wifi-info');
+  if (!ssid) { info.textContent = 'Enter the network name first.'; return; }
+  if (pass && pass.length < 8) { info.textContent = 'A Wi-Fi password has at least 8 characters.'; return; }
+  if (currentTokenRead) return;
+
+  button.disabled = true;
+  info.className = 'from-device-info';
+  info.textContent = 'Saving and trying to connect…';
+  let result = null;
+  try {
+    await tokenSerial(`wifi-add ${toHex(ssid)} ${toHex(pass)}`.trim(), async line => {
+      if (line.startsWith('ERR wifi-add')) { result = line.replace(/^ERR wifi-add:\s*/, ''); return true; }
+      const m = line.match(/^Wi-Fi (.+): (connected|failed)$/);
+      if (m && m[1] === ssid) { result = m[2]; return true; }
+      return false;
+    }, 30000);
+  } catch (err) {
+    serialFailed(info, err);
+    return;
+  } finally {
+    button.disabled = false;
+  }
+  if (result === 'connected') {
+    info.textContent = `Saved. The token connected to ${ssid}.`;
+    document.getElementById('token-wifi-pass').value = '';
+  } else if (result === 'failed') {
+    info.textContent = `Saved, but the token couldn't connect to ${ssid} here. Check the password, or ignore this if the network isn't in range (e.g. a hotspot that's off).`;
+  } else if (result) {
+    info.textContent = result;
+  } else {
+    info.textContent = 'The token didn’t answer. Install the current token firmware above, then try again.';
+  }
+}
+
+async function forgetTokenWifi(button) {
+  if (!confirm('Forget all Wi-Fi networks on the connected token?')) return;
+  if (currentTokenRead) return;
+  const info = document.getElementById('token-wifi-info');
+  button.disabled = true;
+  let ok = false;
+  try {
+    ok = await tokenSerial('wifi-clear', async line => line === 'OK wifi-clear', 5000);
+  } catch (err) {
+    serialFailed(info, err);
+    return;
+  } finally {
+    button.disabled = false;
+  }
+  info.className = 'from-device-info';
+  info.textContent = ok ? 'All networks forgotten.' : 'The token didn’t answer. Install the current token firmware above, then try again.';
+  if (ok) showTokenNetworks([]);
 }
 
 async function registerToken(button) {

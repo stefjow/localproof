@@ -399,7 +399,8 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .register-actions #token-register-btn:hover:not(:disabled) { background: rgba(0, 97, 100, 0.6); }
 
 /* Tokens panel: the add flow sits under the token list. */
-#add-token-form { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+#add-token-form,
+#token-wifi-form { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 
 /* "From a connected device" — WebSerial + ESP Web Tools helpers */
 .from-device-section {

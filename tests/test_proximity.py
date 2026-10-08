@@ -158,6 +158,131 @@ def test_malformed_token_fields(client, extra):
     assert result['status'] == 'Invalid Data Format'
 
 
+# ------------------------------------------------------------ token upload
+# A token posts the station's signed code itself (/api/token-proof), with
+# no login: the signature names the token, so only its owner is credited.
+
+def upload(client, token_id=None, rtt_us=2140, ts=None, payload_b64=None, sig_b64=None,
+           device_id=DEVICE_ID):
+    if payload_b64 is None:
+        payload_b64, sig_b64 = sign_payload(DEVICE_KEY, DEVICE_ID, ts or int(time.time()),
+                                            DEV_LAT, DEV_LNG, token_id=token_id, rtt_us=rtt_us)
+    return client.post('/api/token-proof', json={
+        'device_id': device_id, 'payload': payload_b64, 'sig': sig_b64}).get_json()
+
+
+def log_count():
+    conn = appmod.get_db_connection()
+    n = conn.execute('SELECT COUNT(*) FROM validation_logs').fetchone()[0]
+    conn.close()
+    return n
+
+
+def test_upload_credits_owner_without_login(client):
+    login(client, 'alice')
+    token_id, _ = add_token(client)
+    client.get('/logout')
+    assert upload(client, token_id) == {'success': True, 'status': 'Recorded'}
+    row = last_log()
+    assert row['username'] == 'alice' and row['status'] == 'success'
+    assert row['reason'] == 'Valid Signature + Proximity (2140 us, via token)'
+    assert row['token_id'] == token_id and row['token_rtt_us'] == 2140
+    assert (row['lat'], row['lng']) == (DEV_LAT, DEV_LNG)
+    # It shows up in the owner's own list.
+    login(client, 'alice')
+    assert client.get('/api/my-validations').get_json()[0]['reason'].endswith('via token)')
+
+
+def test_upload_and_qr_count_once(client):
+    login(client, 'alice')
+    token_id, _ = add_token(client)
+    ts = int(time.time())
+    payload_b64, sig_b64 = sign_payload(DEVICE_KEY, DEVICE_ID, ts, DEV_LAT, DEV_LNG,
+                                        token_id=token_id, rtt_us=2140)
+    assert upload(client, payload_b64=payload_b64, sig_b64=sig_b64)['status'] == 'Recorded'
+    # A retry (lost HTTP response) and the owner's QR scan of the same code.
+    assert upload(client, payload_b64=payload_b64, sig_b64=sig_b64) == \
+        {'success': True, 'status': 'Already Recorded'}
+    result = scan(client, payload_b64=payload_b64, sig_b64=sig_b64)
+    assert result['success'] is True and result['proximity_verified'] is True
+    assert log_count() == 1
+
+
+def test_qr_first_then_upload(client):
+    login(client, 'alice')
+    token_id, _ = add_token(client)
+    payload_b64, sig_b64 = sign_payload(DEVICE_KEY, DEVICE_ID, int(time.time()), DEV_LAT, DEV_LNG,
+                                        token_id=token_id, rtt_us=2140)
+    assert scan(client, payload_b64=payload_b64, sig_b64=sig_b64)['proximity_verified'] is True
+    assert upload(client, payload_b64=payload_b64, sig_b64=sig_b64)['status'] == 'Already Recorded'
+    assert log_count() == 1
+
+
+def test_upload_accepts_late_codes(client):
+    login(client, 'alice')
+    token_id, _ = add_token(client)
+    now = int(time.time())
+    assert upload(client, token_id, ts=now - 2 * 24 * 3600)['status'] == 'Recorded'
+    assert upload(client, token_id, ts=now - 8 * 24 * 3600)['status'] == 'Code Expired'
+    assert upload(client, token_id, ts=now + 60)['status'] == 'Code Expired'
+
+
+@pytest.mark.parametrize('case,status', [
+    ('plain', 'No Token Attested'),
+    ('unknown', 'Unknown Token'),
+    ('revoked', 'Unknown Token'),
+    ('slow', 'Too Slow'),
+    ('tampered', 'Invalid Signature'),
+    ('garbage', 'Invalid Data Format'),
+    ('device', 'Invalid Device ID'),
+])
+def test_upload_rejections(client, case, status):
+    login(client, 'alice')
+    token_id, _ = add_token(client)
+    if case == 'plain':
+        result = upload(client)
+    elif case == 'unknown':
+        result = upload(client, 'abcd1234')
+    elif case == 'revoked':
+        client.delete(f'/delete-token/{token_id}')
+        result = upload(client, token_id)
+    elif case == 'slow':
+        result = upload(client, token_id, rtt_us=appmod.MAX_TOKEN_RTT_US + 1)
+    elif case == 'tampered':
+        ts = int(time.time())
+        _, sig_b64 = sign_payload(DEVICE_KEY, DEVICE_ID, ts, DEV_LAT, DEV_LNG,
+                                  token_id=token_id, rtt_us=9000)
+        forged = base64.urlsafe_b64encode(
+            f'{ts}|{DEV_LAT:.6f}|{DEV_LNG:.6f}|{token_id}|2000'.encode()).decode()
+        result = upload(client, payload_b64=forged, sig_b64=sig_b64)
+    elif case == 'garbage':
+        result = upload(client, payload_b64='!!!', sig_b64='!!!')
+    else:
+        result = upload(client, token_id, device_id='00000000')
+    assert result == {'success': False, 'status': status}
+    assert log_count() == 0  # anyone can post here, so failures aren't logged
+
+
+def test_upload_missing_fields(client):
+    resp = client.post('/api/token-proof', json={'device_id': DEVICE_ID})
+    assert resp.status_code == 400
+    assert client.post('/api/token-proof', data='x').status_code == 400
+
+
+def test_upload_respects_max_validations(client):
+    login(client, 'alice')
+    token_id, _ = add_token(client)
+    conn = appmod.get_db_connection()
+    conn.execute('UPDATE devices SET max_validations = 1 WHERE device_id = ?', (DEVICE_ID,))
+    conn.commit()
+    conn.close()
+    payload_b64, sig_b64 = sign_payload(DEVICE_KEY, DEVICE_ID, int(time.time()), DEV_LAT, DEV_LNG,
+                                        token_id=token_id, rtt_us=2140)
+    login(client, 'bob')
+    assert scan(client, payload_b64=payload_b64, sig_b64=sig_b64)['success'] is True
+    assert upload(client, payload_b64=payload_b64, sig_b64=sig_b64)['status'] == 'Max Validations Exceeded'
+
+
 # ------------------------------------------------------------- registration
 
 def test_token_registration_rules(client):

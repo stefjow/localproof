@@ -347,7 +347,8 @@ void loop() {
   // 0. Proximity window: advertise for LPX_WINDOW_MS and, if a token
   //    completes the timed exchange, attest it in this cycle's QR. Runs
   //    before the timestamp is taken so the QR's freshness window starts
-  //    after the session, not before it.
+  //    after the session, not before it. The radio stays up until the
+  //    code is signed, so the token can get a copy (step 2).
   LpxResult prox;
   memset(&prox, 0, sizeof(prox));
   if (lpxBegin()) {
@@ -355,7 +356,6 @@ void loop() {
   } else {
     Serial.println("LPX: radio init failed, QR without proximity");
   }
-  lpxEnd();
 
   // Get the current time from the RTC
   DateTime currentTime = rtc.now();
@@ -363,6 +363,7 @@ void loop() {
   // Check if the RTC time is valid
   if (!currentTime.isValid()) {
     Serial.println("RTC time is invalid!");
+    lpxEnd();
     return;
   }
 
@@ -387,12 +388,16 @@ void loop() {
   snprintf(message, sizeof(message), "%s|%s", deviceId, payload);
   Serial.println(message);
 
-  // 2. Sign with the device's private key
+  // 2. Sign with the device's private key, and hand a passed token the
+  //    same signed code so it can upload it without anyone scanning.
   uint8_t sig[64];
   if (!signMessage((const uint8_t *)message, strlen(message), sig)) {
+    lpxEnd();
     displayErrorMessage("Signing failed.");
     while (1);
   }
+  lpxSendAttest(prox, deviceId, payload, sig);
+  lpxEnd();
 
   // 3. Base64url-encode payload and signature
   char payloadB64[96];

@@ -5,6 +5,9 @@
 //   if (lpxBegin()) { lpxRunSession(deviceId, LPX_WINDOW_MS, prox); lpxEnd(); }
 //   if (prox.ok) { ...append prox.tokenId and prox.medianRttUs to the payload... }
 //
+// To also hand the token the signed code (LPX_ATTEST), sign while the radio
+// is still up and call lpxSendAttest(prox, ...) before lpxEnd().
+//
 // The station does all the timing itself. Nothing the token reports about
 // time is trusted, because in localproof's threat model the token holder
 // is the party who might be cheating.
@@ -48,6 +51,7 @@
 struct LpxResult {
   bool        ok;            // every check passed
   char        tokenId[9];    // SHA-256(tokenPub)[:4] as hex, valid if a token answered
+  uint8_t     tokenMac[6];   // where to send LPX_ATTEST
   uint32_t    medianRttUs;
   uint32_t    maxRttUs;
   const char *reason;        // why it failed, for the serial log
@@ -191,6 +195,7 @@ static bool lpxRunSession(const char *stationId, uint32_t windowMs, LpxResult &r
   if (!gotHello) return false;
 
   lpxKeyId(hello.tokenPub, res.tokenId);
+  memcpy(res.tokenMac, tokenMac, 6);
   if (!lpxAddPeer(tokenMac)) {
     res.reason = "could not add token as peer";
     return false;
@@ -260,4 +265,26 @@ static bool lpxRunSession(const char *stationId, uint32_t windowMs, LpxResult &r
     return lpxFinish(tokenMac, res, false, "too slow, possible relay");
 
   return lpxFinish(tokenMac, res, true, "token in range");
+}
+
+// After a pass, hand the token this cycle's signed code: the same payload
+// and signature the QR shows. Nothing confirms delivery, so it goes out a
+// few times; the token ignores repeats. Call before lpxEnd().
+static void lpxSendAttest(const LpxResult &res, const char *stationId,
+                          const char *payload, const uint8_t sig[64]) {
+  size_t len = strlen(payload);
+  if (!res.ok || len > LPX_PAYLOAD_MAX) return;
+  LpxAttest msg;
+  memset(&msg, 0, sizeof(msg));
+  lpxHeader(msg.h, LPX_ATTEST);
+  memcpy(msg.stationId, stationId, 8);
+  msg.payloadLen = (uint8_t)len;
+  memcpy(msg.payload, payload, len);
+  memcpy(msg.sig, sig, 64);
+  if (!lpxAddPeer(res.tokenMac)) return;
+  for (int i = 0; i < 3; i++) {
+    esp_now_send(res.tokenMac, (const uint8_t *)&msg, sizeof(msg));
+    delay(20);
+  }
+  esp_now_del_peer(res.tokenMac);
 }

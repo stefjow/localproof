@@ -49,6 +49,12 @@ CODE_FRESHNESS_SECONDS = 45
 # reflashing stations. Keep it at or below LPX_MAX_MEDIAN_RTT_US.
 MAX_TOKEN_RTT_US = int(os.environ.get('MAX_TOKEN_RTT_US', '3000'))
 
+# A token can also upload the station's signed code itself (/api/token-proof),
+# possibly much later: it stores codes until it finds Wi-Fi. The timestamp
+# comes from the station's GPS-set clock and is signed, so a late upload is
+# still dated correctly; this only bounds how stale a code may be.
+TOKEN_PROOF_MAX_AGE_SECONDS = 7 * 24 * 3600
+
 # Flask-Login setup
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -223,8 +229,9 @@ def get_my_validations():
 
 # Update validation logs to include username
 def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None, code_ts=None,
-                   token_id=None, token_rtt_us=None):
-    username = current_user.username if current_user.is_authenticated else "unknown"
+                   token_id=None, token_rtt_us=None, username=None):
+    if username is None:
+        username = current_user.username if current_user.is_authenticated else "unknown"
     conn = get_db_connection()
     conn.execute('''
         INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username, scanner_lat, scanner_lng, code_ts,
@@ -313,39 +320,61 @@ def validate_signed(device_id, payload_b64, sig_b64):
 
     return render_template('map.html', devices=devices, username=username, nonce=nonce)
 
-def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
-    """Step 2 of the challenge flow: verify signature, freshness and location."""
-    device_id = pending['device_id']
-
+def check_signed_code(device_id, pubkey_pem, payload_b64, sig_b64):
+    """Parse and verify a station's signed code: the payload and signature
+    from its QR, which a token may also upload. Returns (code, error).
+    code holds ts, lat, lng, token_id, token_rtt_us (None if the payload
+    can't be parsed); error is None or the failure status."""
     try:
-        payload_b64, sig_b64 = pending['data_enc'].split('.')
         payload = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
         signature = base64.urlsafe_b64decode(sig_b64)
         parts = payload.split('|')
         if len(parts) not in (3, 5):
             raise ValueError('unexpected payload field count')
-        ts_str, esp_lat_str, esp_lng_str = parts[:3]
-        code_ts = int(ts_str)
-        esp_lat = float(esp_lat_str)
-        esp_lng = float(esp_lng_str)
+        code = {'ts': int(parts[0]), 'lat': float(parts[1]), 'lng': float(parts[2]),
+                'token_id': None, 'token_rtt_us': None}
         # Optional proximity attestation: tokenId|medianRttUs. It sits inside
         # the signed payload, so only the station can have added it.
-        token_id, token_rtt_us = None, None
         if len(parts) == 5:
-            token_id = parts[3]
-            if not re.fullmatch(r'[0-9a-f]{8}', token_id):
+            if not re.fullmatch(r'[0-9a-f]{8}', parts[3]):
                 raise ValueError('bad token id')
-            token_rtt_us = int(parts[4])
+            code['token_id'] = parts[3]
+            code['token_rtt_us'] = int(parts[4])
     except (ValueError, IndexError, UnicodeDecodeError):
-        log_validation(device_id, "failed", "Invalid Data Format", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
-        return jsonify({'success': False, 'status': 'Invalid Data Format'})
+        return None, 'Invalid Data Format'
 
-    # The signed message includes the device_id from the URL, so a signature
-    # cannot be transplanted onto another device.
+    # The signed message includes the device_id, so a signature cannot be
+    # transplanted onto another device.
     message = f"{device_id}|{payload}".encode('utf-8')
-    if not verify_device_signature(device['pubkey'], message, signature):
-        log_validation(device_id, "failed", "Invalid Signature", esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
-        return jsonify({'success': False, 'status': 'Invalid Signature'})
+    if not verify_device_signature(pubkey_pem, message, signature):
+        return code, 'Invalid Signature'
+    return code, None
+
+
+def already_credited(conn, device_id, code_ts, token_id, username):
+    """True if this code already earned this owner a proximity validation,
+    via the QR or the token's own upload. Either path may come first."""
+    return conn.execute(
+        """SELECT 1 FROM validation_logs WHERE device_id = ? AND code_ts = ? AND token_id = ?
+           AND username = ? AND status = 'success'""",
+        (device_id, code_ts, token_id, username)
+    ).fetchone() is not None
+
+
+def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
+    """Step 2 of the challenge flow: verify signature, freshness and location."""
+    device_id = pending['device_id']
+
+    payload_b64, sig_b64 = pending['data_enc'].split('.', 1)
+    code, error = check_signed_code(device_id, device['pubkey'], payload_b64, sig_b64)
+    if code is None:
+        log_validation(device_id, "failed", error, scanner_lat=scanner_lat, scanner_lng=scanner_lng)
+        return jsonify({'success': False, 'status': error})
+    code_ts, esp_lat, esp_lng = code['ts'], code['lat'], code['lng']
+    token_id, token_rtt_us = code['token_id'], code['token_rtt_us']
+    if error:
+        log_validation(device_id, "failed", error, esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
+        return jsonify({'success': False, 'status': error})
 
     # Freshness: the signed timestamp replaces TOTP
     age = datetime.datetime.now().timestamp() - code_ts
@@ -377,7 +406,22 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
 
     # max_validations counts per signed code (code_ts), not per wall-clock
     # cycle, so a boundary can never double the budget.
+    success = jsonify({
+        'success': True,
+        'status': 'Valid Link' if location_verified else 'Valid Link (location unverified)',
+        'device_id': device_id,
+        'esp_lat': esp_lat,
+        'esp_lng': esp_lng,
+        'device_lat': device['lat'],
+        'device_lng': device['lng'],
+        'location_verified': location_verified,
+        'proximity_verified': proximity_verified
+    })
     conn = get_db_connection()
+    if proximity_verified and already_credited(conn, device_id, code_ts, token_id, current_user.username):
+        conn.close()  # the token uploaded this code first; one validation per code and owner
+        return success
+
     validations_for_code = conn.execute(
         "SELECT COUNT(*) FROM validation_logs WHERE device_id = ? AND code_ts = ? AND status = 'success'",
         (device_id, code_ts)
@@ -401,18 +445,7 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
     conn.execute('UPDATE devices SET active = TRUE WHERE device_id = ?', (device_id,))
     conn.commit()
     conn.close()
-
-    return jsonify({
-        'success': True,
-        'status': 'Valid Link' if location_verified else 'Valid Link (location unverified)',
-        'device_id': device_id,
-        'esp_lat': esp_lat,
-        'esp_lng': esp_lng,
-        'device_lat': device['lat'],
-        'device_lng': device['lng'],
-        'location_verified': location_verified,
-        'proximity_verified': proximity_verified
-    })
+    return success
 
 @app.route('/validate/complete', methods=['POST'])
 def complete_validation():
@@ -457,6 +490,65 @@ def complete_validation():
         return jsonify({'success': False, 'status': 'Invalid Device ID'})
 
     return complete_validation_v2(pending, device, scanner_lat, scanner_lng)
+
+@app.route('/api/token-proof', methods=['POST'])
+def token_proof():
+    """A token uploads the signed code a station sent it after a passed
+    proximity check (esp32/token/): the same device_id, payload and
+    signature the QR carries. No login: the station's signature names the
+    token, so the code can only ever credit that token's owner. Failures
+    aren't logged, since anyone can post here; the token gets the status."""
+    data = request.get_json(silent=True) or {}
+    device_id = data.get('device_id')
+    payload_b64 = data.get('payload')
+    sig_b64 = data.get('sig')
+    if not all(isinstance(v, str) for v in (device_id, payload_b64, sig_b64)):
+        return jsonify({'success': False, 'status': 'Missing Fields'}), 400
+
+    conn = get_db_connection()
+    try:
+        device = conn.execute('SELECT * FROM devices WHERE device_id = ?', (device_id,)).fetchone()
+        if not device or not device['pubkey']:
+            return jsonify({'success': False, 'status': 'Invalid Device ID'})
+
+        code, error = check_signed_code(device_id, device['pubkey'], payload_b64, sig_b64)
+        if error:
+            return jsonify({'success': False, 'status': error})
+        token_id, token_rtt_us = code['token_id'], code['token_rtt_us']
+        if token_id is None:
+            return jsonify({'success': False, 'status': 'No Token Attested'})
+
+        age = datetime.datetime.now().timestamp() - code['ts']
+        if age > TOKEN_PROOF_MAX_AGE_SECONDS or age < -10:
+            return jsonify({'success': False, 'status': 'Code Expired'})
+        if token_rtt_us > MAX_TOKEN_RTT_US:
+            return jsonify({'success': False, 'status': 'Too Slow'})
+
+        token = conn.execute('SELECT username FROM tokens WHERE token_id = ?', (token_id,)).fetchone()
+        if not token:
+            return jsonify({'success': False, 'status': 'Unknown Token'})
+        owner = token['username']
+
+        # Retries and a QR scan of the same code count once.
+        if already_credited(conn, device_id, code['ts'], token_id, owner):
+            return jsonify({'success': True, 'status': 'Already Recorded'})
+
+        validations_for_code = conn.execute(
+            "SELECT COUNT(*) FROM validation_logs WHERE device_id = ? AND code_ts = ? AND status = 'success'",
+            (device_id, code['ts'])
+        ).fetchone()[0]
+        if validations_for_code >= device['max_validations']:
+            return jsonify({'success': False, 'status': 'Max Validations Exceeded'})
+
+        conn.execute('UPDATE devices SET active = TRUE WHERE device_id = ?', (device_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_validation(device_id, "success", f"Valid Signature + Proximity ({token_rtt_us} us, via token)",
+                   code['lat'], code['lng'], code_ts=code['ts'],
+                   token_id=token_id, token_rtt_us=token_rtt_us, username=owner)
+    return jsonify({'success': True, 'status': 'Recorded'})
 
 @app.route('/add-device', methods=['POST'])
 @login_required  # Ensure the user is logged in

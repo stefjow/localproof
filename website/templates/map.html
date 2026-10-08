@@ -556,8 +556,8 @@
             if (navigator.serial) return;
             for (const [note, panel] of [['reg-unsupported', 'add-device-drawer'], ['token-unsupported', 'tokens-drawer']]) {
                 document.getElementById(note).hidden = false;
-                document.querySelector(`#${panel} .from-device-section`)
-                    .querySelectorAll('button').forEach(b => { b.disabled = true; });
+                document.querySelectorAll(`#${panel} .from-device-section button`)
+                    .forEach(b => { b.disabled = true; });
             }
         })();
 

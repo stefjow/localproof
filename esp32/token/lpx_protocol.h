@@ -13,6 +13,8 @@
 //           ... LPX_ROUNDS times ...           |  station; no crypto here
 //   <------ OPEN(m, sig) --------------------       sig over the transcript
 //   ------- RESULT(ok, medianRtt) ---------->       informational only
+//   ------- ATTEST(payload, sig) ----------->       on a pass: the signed
+//                                                   code from the QR
 //
 // Why it is split this way: an ECDSA signature takes tens of ms on an
 // ATECC608B and varies from call to call, which would drown out the delay
@@ -22,6 +24,11 @@
 // (and signed over) only afterwards, so a relay sitting next to the
 // station can't answer correctly without forwarding every challenge to
 // the real token and waiting for the reply.
+//
+// ATTEST hands the token the same signed code the station puts in its QR,
+// so the token can upload it to the server itself (/api/token-proof). It
+// needs no protection on the radio: the station's signature covers it,
+// and it can only ever credit the token it names.
 //
 // Two rules make that hold:
 //  - The token signs c[] and r[]. A relay that "pre-asks" the token with
@@ -48,6 +55,7 @@
 #define LPX_CHANNEL    6       // both sides must sit on the same Wi-Fi channel
 #define LPX_ROUNDS     24      // fast-phase rounds; one random byte each
 #define LPX_NONCE_LEN  16
+#define LPX_PAYLOAD_MAX 64     // the station's signed payload, see esp32_code.ino
 
 enum LpxType : uint8_t {
   LPX_BEACON = 1,  // station -> broadcast: a session is open
@@ -56,6 +64,7 @@ enum LpxType : uint8_t {
   LPX_RESP   = 4,  // token -> station: fast-phase response byte
   LPX_OPEN   = 5,  // token -> station: reveal m + signature over transcript
   LPX_RESULT = 6,  // station -> token: outcome, for the token's UI only
+  LPX_ATTEST = 7,  // station -> token: the signed code, for the token to upload
 };
 
 struct __attribute__((packed)) LpxHeader {
@@ -101,6 +110,14 @@ struct __attribute__((packed)) LpxResultMsg {
   uint32_t  medianRttUs;
 };
 
+struct __attribute__((packed)) LpxAttest {
+  LpxHeader h;
+  char      stationId[8];               // device id, 8 hex chars, no NUL
+  uint8_t   payloadLen;
+  char      payload[LPX_PAYLOAD_MAX];   // "ts|lat|lng|tokenId|medianRttUs", zero-padded
+  uint8_t   sig[64];                    // station's ECDSA r||s over "stationId|payload"
+};
+
 // Wire sizes are part of the protocol; both sides must agree exactly.
 static_assert(sizeof(LpxBeacon) == 28, "LpxBeacon wire size");
 static_assert(sizeof(LpxHello) == 116, "LpxHello wire size");
@@ -108,6 +125,7 @@ static_assert(sizeof(LpxChal) == 6, "LpxChal wire size");
 static_assert(sizeof(LpxResp) == 6, "LpxResp wire size");
 static_assert(sizeof(LpxOpen) == 92, "LpxOpen wire size");
 static_assert(sizeof(LpxResultMsg) == 9, "LpxResultMsg wire size");
+static_assert(sizeof(LpxAttest) == 141, "LpxAttest wire size");
 
 static inline void lpxHeader(LpxHeader &h, LpxType type) {
   h.magic = LPX_MAGIC;

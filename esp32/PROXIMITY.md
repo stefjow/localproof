@@ -37,6 +37,36 @@ added it.
   adds microseconds. Only nanosecond time-of-flight (UWB secure ranging,
   802.15.4z) catches that.
 
+## Proof without scanning
+
+A token with Wi-Fi uploads the proof itself. After a passed exchange the
+station sends the token the same signed code its QR shows (`LPX_ATTEST`),
+and the token posts it to `/api/token-proof`. The station's signature names
+the token, so the code can only ever credit that token's owner; the
+endpoint needs no login, and anyone who gets hold of the code (a photo of
+the QR, a sniffed frame) can at most credit the owner.
+
+- **Late uploads count.** The timestamp comes from the station's GPS-set
+  clock and is signed, so the server accepts codes up to 7 days old
+  (`TOKEN_PROOF_MAX_AGE_SECONDS`). A token that saw no known network keeps
+  up to 16 codes in NVS and uploads them the next time it is on near one.
+- **Counts once.** An upload and the owner's QR scan of the same code are
+  one validation, whichever comes first. A token upload counts toward the
+  station's `max_validations` like a scan.
+- **One code per power-on.** The token is meant to be switched on next to a
+  station and off again. After one code it stops answering stations, so a
+  token left on doesn't log a validation every 30 s.
+- **Failures aren't logged** (anyone can post to the endpoint); the token
+  prints the server's status on serial and shows it on its LED.
+- **Wi-Fi** is set in the Tokens panel, which writes up to 3 networks to the
+  token over USB (`wifi-add`, `wifi-clear`, `status` on serial). They never
+  reach the server. A phone hotspot lets the token upload at the station.
+  The networks sit in NVS in plain text, like the software key.
+
+The upload uses HTTPS validated against ISRG Root X1/X2
+(`token/letsencrypt_roots.h`). The code needs no protection in transit;
+validation only stops a fake server from telling the token to drop it.
+
 ## How the exchange works
 
 Defined in `lpx_protocol.h`; the diagram at the top of that file is the
@@ -52,21 +82,16 @@ not timed because an ATECC608B takes tens of milliseconds to sign.
    station (locked, key in slot 0). Set `TOKEN_SDA`/`TOKEN_SCL` in
    `token/token.ino`. Without an ATECC the token makes a software key in
    NVS. That is fine for bench tests but can be cloned from flash.
-2. **Flash** `token/token.ino` and copy the `Pubkey:` line from serial.
-3. **Register** it to your account:
-   ```bash
-   python python_generator_v2.py pem <xy-hex>
-   ```
-   then, logged in on the site, run in the browser console:
-   ```js
-   fetch('/add-token', {method: 'POST', headers: {'Content-Type': 'application/json'},
-     body: JSON.stringify({pubkey: `<paste PEM>`})}).then(r => r.json()).then(console.log)
-   ```
-   `GET /api/my-tokens` lists your tokens; `DELETE /delete-token/<id>`
-   revokes a lost one.
-4. **Flash** the station with the updated `esp32_code.ino`. Each 30 s
+2. **Install, register, Wi-Fi**: in the site's Tokens panel (Chrome or
+   Edge on a desktop, token on USB): install the token firmware, Read from
+   token, Register Token, and optionally add Wi-Fi networks. The panel
+   also lists and revokes your tokens. By hand: flash `token/token.ino`,
+   turn the `Pubkey:` line into a PEM with
+   `python python_generator_v2.py pem <xy-hex>` and post it to `/add-token`.
+3. **Flash** the station with the updated `esp32_code.ino`. Each 30 s
    cycle it now advertises for `LPX_WINDOW_MS` (3 s) before drawing the QR.
-   Hold the token near the station; the next QR carries the attestation.
+   Switch the token on near the station; the next QR carries the
+   attestation, and the token uploads its copy if it has Wi-Fi.
 
 ## Calibrating the limit
 
@@ -91,7 +116,8 @@ without reflashing stations.
 - **Battery**: the radio draws roughly 100 mA during the 3 s window, every
   cycle. Shorten `LPX_WINDOW_MS`, or wake on a button instead.
 - **Flash**: the Wi-Fi stack grows the station image from about 360 KB to
-  970 KB (73% of the default partition).
+  970 KB (73% of the default partition). The token, with HTTPS, is about
+  1080 KB (82%).
 - **QR size**: an attested URL can reach about 195 characters, past QR
   version 8's 192 bytes, so `drawQRCode` switches to version 9 (3 px
   modules) when needed. Check that phones still scan it on your display.
@@ -101,7 +127,8 @@ without reflashing stations.
 
 ## Status
 
-Both sketches compile on Arduino-ESP32 core 3.3.12 for the classic ESP32,
-and the protocol checks pass the host tests. Nothing has been run on
-hardware yet, so radio timing, the default limit and QR scannability at
-version 9 still need to be verified on real devices.
+Hardware-tested on 2026-10-08 with two classic ESP32s (station with
+ATECC608B, token with a software key): sessions pass every cycle at a
+median of about 2050 us, and QR version 9 scans fine on the e-paper. The
+token upload (`LPX_ATTEST`, `/api/token-proof`) is covered by the server
+tests; its radio and Wi-Fi path still needs a run on hardware.
