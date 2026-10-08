@@ -54,6 +54,8 @@ MAX_TOKEN_RTT_US = int(os.environ.get('MAX_TOKEN_RTT_US', '3000'))
 # comes from the station's GPS-set clock and is signed, so a late upload is
 # still dated correctly; this only bounds how stale a code may be.
 TOKEN_PROOF_MAX_AGE_SECONDS = 7 * 24 * 3600
+# Uploads later than this say so in the logged reason.
+TOKEN_PROOF_LATE_SECONDS = 5 * 60
 
 # Flask-Login setup
 login_manager = LoginManager()
@@ -99,6 +101,15 @@ def verify_device_signature(pubkey_pem, message: bytes, signature: bytes) -> boo
         return True
     except (ValueError, TypeError, IndexError):
         return False
+
+def format_delay(seconds):
+    """'12 min', '3 h', '2 d' for a delay in seconds."""
+    minutes = int(seconds // 60)
+    if minutes < 120:
+        return f"{minutes} min"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} h"
+    return f"{minutes // (24 * 60)} d"
 
 def haversine_m(lat1, lng1, lat2, lng2):
     """Distance between two coordinates in meters."""
@@ -229,16 +240,19 @@ def get_my_validations():
 
 # Update validation logs to include username
 def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None, code_ts=None,
-                   token_id=None, token_rtt_us=None, username=None):
+                   token_id=None, token_rtt_us=None, username=None, at=None):
+    """at: when it happened (UTC datetime), if not now."""
     if username is None:
         username = current_user.username if current_user.is_authenticated else "unknown"
+    if at is None:
+        at = datetime.datetime.utcnow()
     conn = get_db_connection()
     conn.execute('''
         INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username, scanner_lat, scanner_lng, code_ts,
                                      token_id, token_rtt_us)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
-        datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+        at.strftime('%Y-%m-%d %H:%M:%S'),
         device_id,
         status,
         reason,
@@ -545,9 +559,15 @@ def token_proof():
     finally:
         conn.close()
 
-    log_validation(device_id, "success", f"Valid Signature + Proximity ({token_rtt_us} us, via token)",
+    # Logged at the station's signed time, when the owner was there, not at
+    # the upload, which may come much later; the reason notes a late upload.
+    reason = f"Valid Signature + Proximity ({token_rtt_us} us, via token"
+    if age > TOKEN_PROOF_LATE_SECONDS:
+        reason += f", uploaded {format_delay(age)} later"
+    log_validation(device_id, "success", reason + ")",
                    code['lat'], code['lng'], code_ts=code['ts'],
-                   token_id=token_id, token_rtt_us=token_rtt_us, username=owner)
+                   token_id=token_id, token_rtt_us=token_rtt_us, username=owner,
+                   at=datetime.datetime.fromtimestamp(code['ts'], datetime.timezone.utc).replace(tzinfo=None))
     return jsonify({'success': True, 'status': 'Recorded'})
 
 @app.route('/add-device', methods=['POST'])

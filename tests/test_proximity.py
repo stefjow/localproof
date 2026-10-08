@@ -223,6 +223,17 @@ def test_upload_accepts_late_codes(client):
     token_id, _ = add_token(client)
     now = int(time.time())
     assert upload(client, token_id, ts=now - 2 * 24 * 3600)['status'] == 'Recorded'
+    # Logged at the station's time, with the delay noted.
+    row = last_log()
+    assert row['timestamp'] == time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(now - 2 * 24 * 3600))
+    assert row['reason'] == 'Valid Signature + Proximity (2140 us, via token, uploaded 2 d later)'
+    assert upload(client, token_id, ts=now - 3 * 3600)['status'] == 'Recorded'
+    assert last_log()['reason'].endswith('via token, uploaded 3 h later)')
+    # Within a few minutes it's just "via token", at the station's time too.
+    assert upload(client, token_id, ts=now - 90)['status'] == 'Recorded'
+    row = last_log()
+    assert row['reason'] == 'Valid Signature + Proximity (2140 us, via token)'
+    assert row['timestamp'] == time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(now - 90))
     assert upload(client, token_id, ts=now - 8 * 24 * 3600)['status'] == 'Code Expired'
     assert upload(client, token_id, ts=now + 60)['status'] == 'Code Expired'
 
