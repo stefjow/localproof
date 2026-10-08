@@ -54,8 +54,12 @@
 
 #define TOKEN_SERVER "https://localproof.libmap.org/api/token-proof"
 
-// On-board LED, active high (GPIO 2 on most ESP32 dev boards); -1 for none.
+// Status LED (GPIO 2 on most ESP32 dev boards); -1 for none.
+// TOKEN_LED_ON is the level that lights it: HIGH, or LOW if it is wired
+// to 3.3 V. Some boards have only a serial activity LED, which no pin
+// controls; wire an LED (with ~330 ohm) to a free pin there.
 #define TOKEN_LED 2
+#define TOKEN_LED_ON HIGH
 
 // I2C pins for the ATECC608B. Change these for your board.
 #define TOKEN_SDA 21
@@ -119,8 +123,10 @@ static QueueHandle_t attestQueue;  // protocol task -> loop()
 
 enum Verdict { ACCEPTED, REFUSED, TRY_LATER };  // the server's answer to an upload
 
-enum LedMode { LED_LISTEN, LED_BUSY, LED_DONE, LED_STORED, LED_REJECTED };
-static volatile LedMode ledMode = LED_LISTEN;
+// What the LED shows is worked out from these each blink (ledTask), so
+// it can't get stuck in a state an event forgot to clear.
+static volatile bool uploading = false;
+static volatile int uploadsAccepted = 0, uploadsRefused = 0;  // since power-on
 
 struct Rx {
   uint8_t mac[6];
@@ -251,7 +257,6 @@ static void onBeacon(const Rx &rx) {
   s.next = 0;
   s.opened = false;
   s.active = true;
-  ledMode = LED_BUSY;
   s.startedMs = millis();
 
   LpxHello hello;
@@ -309,7 +314,6 @@ static void onResult(const Rx &rx) {
   const LpxResultMsg *res = (const LpxResultMsg *)rx.data;
   Serial.printf("Station %.8s says: %s (median %lu us)\n", s.stationId,
                 res->ok ? "PASS" : "FAIL", (unsigned long)res->medianRttUs);
-  if (!res->ok && !gotCode) ledMode = LED_LISTEN;
 }
 
 // The station's signed code for the session we just finished. Not checked
@@ -473,7 +477,7 @@ static Verdict postCode(WiFiClientSecure &tls, const StoredCode &c) {
 }
 
 static void uploadStored() {
-  ledMode = LED_BUSY;
+  uploading = true;
   int accepted = 0, refused = 0;
   if (joinKnownNetwork()) {
     WiFiClientSecure tls;
@@ -489,11 +493,9 @@ static void uploadStored() {
     saveStored();
   }
   leaveNetwork();
-
-  if (refused) ledMode = LED_REJECTED;
-  else if (storedCount) ledMode = LED_STORED;
-  else if (accepted) ledMode = LED_DONE;
-  else ledMode = LED_LISTEN;
+  uploadsAccepted += accepted;
+  uploadsRefused += refused;
+  uploading = false;
 }
 
 // -------------------------------------------------------------------- led
@@ -502,19 +504,20 @@ static void ledTask(void *) {
   pinMode(TOKEN_LED, OUTPUT);
   auto flashes = [](int n, int onMs, int periodMs) {
     for (int i = 0; i < n; i++) {
-      digitalWrite(TOKEN_LED, HIGH); vTaskDelay(pdMS_TO_TICKS(onMs));
-      digitalWrite(TOKEN_LED, LOW);  vTaskDelay(pdMS_TO_TICKS(onMs));
+      digitalWrite(TOKEN_LED, TOKEN_LED_ON);  vTaskDelay(pdMS_TO_TICKS(onMs));
+      digitalWrite(TOKEN_LED, !TOKEN_LED_ON); vTaskDelay(pdMS_TO_TICKS(onMs));
     }
     vTaskDelay(pdMS_TO_TICKS(periodMs - 2 * n * onMs));
   };
   for (;;) {
-    switch (ledMode) {
-      case LED_LISTEN:   flashes(1, 50, 1000); break;
-      case LED_BUSY:     flashes(1, 100, 200); break;
-      case LED_DONE:     digitalWrite(TOKEN_LED, HIGH); vTaskDelay(pdMS_TO_TICKS(200)); break;
-      case LED_STORED:   flashes(2, 120, 2000); break;
-      case LED_REJECTED: flashes(3, 80, 2000); break;
-    }
+    bool exchanging = s.active || (s.opened && millis() - s.openedMs <= ATTEST_WINDOW_MS);
+    if (uploading || exchanging)  flashes(1, 100, 200);   // busy
+    else if (uploadsRefused)      flashes(3, 80, 2000);   // the server refused a code
+    else if (storedCount)         flashes(2, 120, 2000);  // waiting for Wi-Fi
+    else if (uploadsAccepted) {                           // done
+      digitalWrite(TOKEN_LED, TOKEN_LED_ON);
+      vTaskDelay(pdMS_TO_TICKS(200));
+    } else                        flashes(1, 50, 1000);   // waiting for a station
   }
 }
 
@@ -654,7 +657,6 @@ void loop() {
   if (xQueueReceive(attestQueue, &a, 0) == pdTRUE) {
     storeCode(a);
     nextUploadMs = millis();  // upload right away
-    ledMode = LED_STORED;
   }
 
   if (storedCount && netCount && !s.active && (int32_t)(millis() - nextUploadMs) >= 0) {
