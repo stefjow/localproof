@@ -9,6 +9,7 @@ import datetime
 import bcrypt
 import hashlib
 import os
+import re
 import secrets
 from math import radians, sin, cos, asin, sqrt
 from dotenv import load_dotenv
@@ -41,6 +42,12 @@ MAX_SCANNER_DISTANCE_M = 500 # max allowed distance between scanner and device
 # v2 (signature) scheme: max age of a signed code, covering the device's
 # 30s display cycle plus clock skew and the challenge round trip
 CODE_FRESHNESS_SECONDS = 45
+
+# Proximity tokens: a station that saw a token answer its timed challenges
+# appends tokenId|medianRttUs to the signed payload. The server applies its
+# own limit on top of the station's, so it can be tightened without
+# reflashing stations. Keep it at or below LPX_MAX_MEDIAN_RTT_US.
+MAX_TOKEN_RTT_US = int(os.environ.get('MAX_TOKEN_RTT_US', '6000'))
 
 # Flask-Login setup
 login_manager = LoginManager()
@@ -215,12 +222,14 @@ def get_my_validations():
     return jsonify([dict(log) for log in logs])
 
 # Update validation logs to include username
-def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None, code_ts=None):
+def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None, code_ts=None,
+                   token_id=None, token_rtt_us=None):
     username = current_user.username if current_user.is_authenticated else "unknown"
     conn = get_db_connection()
     conn.execute('''
-        INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username, scanner_lat, scanner_lng, code_ts)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username, scanner_lat, scanner_lng, code_ts,
+                                     token_id, token_rtt_us)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
         device_id,
@@ -232,7 +241,9 @@ def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=No
         username,
         scanner_lat,
         scanner_lng,
-        code_ts
+        code_ts,
+        token_id,
+        token_rtt_us
     ))
     conn.commit()
     conn.close()
@@ -310,10 +321,21 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
         payload_b64, sig_b64 = pending['data_enc'].split('.')
         payload = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
         signature = base64.urlsafe_b64decode(sig_b64)
-        ts_str, esp_lat_str, esp_lng_str = payload.split('|')
+        parts = payload.split('|')
+        if len(parts) not in (3, 5):
+            raise ValueError('unexpected payload field count')
+        ts_str, esp_lat_str, esp_lng_str = parts[:3]
         code_ts = int(ts_str)
         esp_lat = float(esp_lat_str)
         esp_lng = float(esp_lng_str)
+        # Optional proximity attestation: tokenId|medianRttUs. It sits inside
+        # the signed payload, so only the station can have added it.
+        token_id, token_rtt_us = None, None
+        if len(parts) == 5:
+            token_id = parts[3]
+            if not re.fullmatch(r'[0-9a-f]{8}', token_id):
+                raise ValueError('bad token id')
+            token_rtt_us = int(parts[4])
     except (ValueError, IndexError, UnicodeDecodeError):
         log_validation(device_id, "failed", "Invalid Data Format", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
         return jsonify({'success': False, 'status': 'Invalid Data Format'})
@@ -342,6 +364,17 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
             return jsonify({'success': False, 'status': 'Location Mismatch'})
         location_verified = True
 
+    # Proximity counts only for the token's owner, and only under the
+    # server's own round-trip limit. Anyone else scanning the same QR still
+    # gets a normal validation, just without proximity.
+    proximity_verified = False
+    if token_id is not None and current_user.is_authenticated and token_rtt_us <= MAX_TOKEN_RTT_US:
+        conn = get_db_connection()
+        owned = conn.execute('SELECT 1 FROM tokens WHERE token_id = ? AND username = ?',
+                             (token_id, current_user.username)).fetchone()
+        conn.close()
+        proximity_verified = owned is not None
+
     # max_validations counts per signed code (code_ts), not per wall-clock
     # cycle, so a boundary can never double the budget.
     conn = get_db_connection()
@@ -356,7 +389,14 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
         return jsonify({'success': False, 'status': 'Max Validations Exceeded'})
 
     reason = "Valid Signature" if location_verified else "Valid Signature (location unverified)"
-    log_validation(device_id, "success", reason, esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
+    # The token is only recorded for its owner; logging it on someone else's
+    # scan would tell them whose token was at the station.
+    if proximity_verified:
+        reason += f" + Proximity ({token_rtt_us} us)"
+    else:
+        token_id, token_rtt_us = None, None
+    log_validation(device_id, "success", reason, esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts,
+                   token_id=token_id, token_rtt_us=token_rtt_us)
 
     conn.execute('UPDATE devices SET active = TRUE WHERE device_id = ?', (device_id,))
     conn.commit()
@@ -370,7 +410,8 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
         'esp_lng': esp_lng,
         'device_lat': device['lat'],
         'device_lng': device['lng'],
-        'location_verified': location_verified
+        'location_verified': location_verified,
+        'proximity_verified': proximity_verified
     })
 
 @app.route('/validate/complete', methods=['POST'])
@@ -561,6 +602,53 @@ def my_validations_page():
 @app.route('/devices/<device_id>/history', methods=['GET'])
 def device_history_page(device_id):
     return redirect(url_for('show_map', history=device_id))
+
+@app.route('/add-token', methods=['POST'])
+@login_required
+def add_token_route():
+    """Register a proximity token (esp32/token/) to the logged-in user.
+    Same key format as /add-device: a P-256 public key in PEM."""
+    data = request.get_json(silent=True) or {}
+    pubkey = parse_public_key_pem(data.get('pubkey') or '')
+    if not pubkey:
+        return jsonify({'success': False, 'message': 'Invalid public key (expecting a P-256 public key in PEM format).'})
+
+    token_id = derive_device_id(pubkey)
+    conn = get_db_connection()
+    try:
+        conn.execute('INSERT INTO tokens (token_id, pubkey, username) VALUES (?, ?, ?)',
+                     (token_id, pubkey, current_user.username))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({'success': False, 'message': 'This public key is already registered.'})
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'token_id': token_id})
+
+
+@app.route('/api/my-tokens')
+@login_required
+def get_my_tokens():
+    conn = get_db_connection()
+    tokens = conn.execute('SELECT token_id, timestamp FROM tokens WHERE username = ? ORDER BY timestamp',
+                          (current_user.username,)).fetchall()
+    conn.close()
+    return jsonify([dict(t) for t in tokens])
+
+
+@app.route('/delete-token/<token_id>', methods=['DELETE'])
+@login_required
+def delete_token(token_id):
+    """Revoke a token, e.g. when it is lost: its proximity proofs stop counting."""
+    conn = get_db_connection()
+    deleted = conn.execute('DELETE FROM tokens WHERE token_id = ? AND username = ?',
+                           (token_id, current_user.username)).rowcount
+    conn.commit()
+    conn.close()
+    if not deleted:
+        return jsonify({'success': False, 'message': 'Token not found.'})
+    return jsonify({'success': True})
+
 
 @app.route('/delete-device/<device_id>', methods=['DELETE'])
 @login_required

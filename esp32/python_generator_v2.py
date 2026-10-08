@@ -95,13 +95,16 @@ def pem_from_xy_hex(xy_hex):
     print(key.export_key(format='PEM'))
 
 
-def sign_payload(private_key, device_id, ts, lat, lng):
+def sign_payload(private_key, device_id, ts, lat, lng, token_id=None, rtt_us=None):
     """Sign 'device_id|ts|lat|lng', return (payload_b64, sig_b64).
 
     The payload string is signed exactly as transmitted, so the server can
-    verify without re-formatting floats.
+    verify without re-formatting floats. With token_id/rtt_us it simulates
+    a station that saw a proximity token: 'ts|lat|lng|token_id|rtt_us'.
     """
     payload = f"{ts}|{lat:.6f}|{lng:.6f}"
+    if token_id is not None:
+        payload += f"|{token_id}|{int(rtt_us)}"
     message = f"{device_id}|{payload}".encode('utf-8')
     signature = DSS.new(private_key, 'fips-186-3').sign(SHA256.new(message))
     return (

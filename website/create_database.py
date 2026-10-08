@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS pending_validations (
 )
 ''')
 
+# Proximity tokens (esp32/token/). token_id is derived from the public key
+# exactly like device_id; each token belongs to one user.
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS tokens (
+    token_id TEXT PRIMARY KEY,
+    pubkey TEXT NOT NULL,
+    username TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+''')
+
 # Migrations (no-ops on fresh databases):
 # - scanner location and signed-code timestamp columns on validation_logs
 # - ECDSA public key (PEM) on devices for the signature scheme
@@ -65,6 +76,8 @@ for table, column in (
     ('devices', 'pubkey TEXT'),
     ('devices', 'name TEXT'),
     ('devices', 'description TEXT'),
+    ('validation_logs', 'token_id TEXT'),
+    ('validation_logs', 'token_rtt_us INTEGER'),
 ):
     try:
         cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column}')

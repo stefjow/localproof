@@ -21,7 +21,7 @@ Scanning the QR opens a URL of the form `/v2/<device_id>/<payload>/<signature>` 
 
 ### What a successful validation shows
 
-That a live browser, at a plausible location, answered a fresh challenge within seconds of the QR being displayed. It does not defend against a cooperating on-site relay (someone at the device streaming the QR and spoofing geolocation); ruling that out would require a proximity channel such as NFC or UWB, which a display-only device cannot provide.
+That a live browser, at a plausible location, answered a fresh challenge within seconds of the QR being displayed. It does not defend against a cooperating on-site relay (someone at the device streaming the QR and spoofing geolocation); ruling that out requires a proximity channel. [Proximity tokens](esp32/PROXIMITY.md) add one over ESP-NOW: they defeat streaming the QR or bridging the radio over the internet, though not a radio-level relay or a handed-over token.
 
 ### Why these pieces
 

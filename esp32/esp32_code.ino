@@ -12,6 +12,7 @@
 #include <mbedtls/base64.h>
 #include <mbedtls/version.h>
 #include <string.h>
+#include "lpx_station.h"  // proximity check (distance bounding over ESP-NOW)
 
 // Device identity is derived from the on-chip pubkey (see deriveDeviceId()).
 // secrets.h is only needed for the software-key fallback; release binaries
@@ -343,6 +344,19 @@ void setup() {
 }
 
 void loop() {
+  // 0. Proximity window: advertise for LPX_WINDOW_MS and, if a token
+  //    completes the timed exchange, attest it in this cycle's QR. Runs
+  //    before the timestamp is taken so the QR's freshness window starts
+  //    after the session, not before it.
+  LpxResult prox;
+  memset(&prox, 0, sizeof(prox));
+  if (lpxBegin()) {
+    lpxRunSession(deviceId, LPX_WINDOW_MS, prox);
+  } else {
+    Serial.println("LPX: radio init failed, QR without proximity");
+  }
+  lpxEnd();
+
   // Get the current time from the RTC
   DateTime currentTime = rtc.now();
 
@@ -360,8 +374,15 @@ void loop() {
   //    signed exactly as transmitted, prefixed with the device id so a
   //    signature cannot be transplanted onto another device.
   uint32_t ts = currentTime.unixtime();
+  //    With a passed proximity check the payload grows to
+  //    ts|lat|lng|tokenId|medianRttUs — still signed as one string.
   char payload[64];
-  snprintf(payload, sizeof(payload), "%lu|%.6f|%.6f", (unsigned long)ts, lat, lng);
+  if (prox.ok) {
+    snprintf(payload, sizeof(payload), "%lu|%.6f|%.6f|%s|%lu", (unsigned long)ts, lat, lng,
+             prox.tokenId, (unsigned long)prox.medianRttUs);
+  } else {
+    snprintf(payload, sizeof(payload), "%lu|%.6f|%.6f", (unsigned long)ts, lat, lng);
+  }
   char message[96];
   snprintf(message, sizeof(message), "%s|%s", deviceId, payload);
   Serial.println(message);
@@ -417,8 +438,12 @@ void drawQRCode(const char *text)
 {
   // Create the QR code
   QRCode qrcode;
-  uint8_t qrcodeData[qrcode_getBufferSize(QR_VERSION)];
-  qrcode_initText(&qrcode, qrcodeData, QR_VERSION, 0, text);
+  // Version 8 holds 192 bytes at ECC L. A proximity-attested URL can reach
+  // ~195 chars (long negative coordinates), and this QR library doesn't
+  // check capacity, so step up to version 9 (230 bytes, 3 px modules).
+  uint8_t version = strlen(text) <= 192 ? QR_VERSION : QR_VERSION + 1;
+  uint8_t qrcodeData[qrcode_getBufferSize(version)];
+  qrcode_initText(&qrcode, qrcodeData, version, 0, text);
 
   // Calculate the size of each QR code module (pixel) to fill the screen
   uint16_t screenWidth = display.width();

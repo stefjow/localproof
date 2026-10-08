@@ -7,6 +7,8 @@ This directory contains the code for ESP32 devices and Python-based simulators t
 ## Files
 
 - **`esp32_code.ino`**: Main ESP32 code. Signs `device_id|ts|lat|lng` with ECDSA P-256 — in the ATECC608 secure element when present (I2C 0x60, locked, key in slot 0), otherwise in software (mbedtls) — and displays the resulting `/v2/...` URL as a QR code.
+- **`lpx_protocol.h`, `lpx_station.h`**: Optional proximity check. The station times a token's answers over ESP-NOW and, if it passes, signs `tokenId|medianRttUs` into the QR payload. See [PROXIMITY.md](PROXIMITY.md).
+- **`token/`**: Firmware for the proximity token the verifier carries.
 - **`hw_probe/`**: Diagnostic sketch — I2C wake-scan, ATECC status and public-key readout, RTC sync over serial (`SETTIME <epoch>`), and test signing (`SIGN <sha256 hex>`).
 - **`secrets.h.example`**: Optional template for the software-key fallback (`secrets.h` is gitignored). With an ATECC608 present, no `secrets.h` is needed — the device id is derived from the chip's public key.
 - **`python_generator_v2.py`**: Simulates the device — key generation, signed QR codes, and ATECC public-key conversion (`pem` command).
