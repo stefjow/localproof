@@ -118,9 +118,9 @@ def test_anonymous_scan_not_credited(client):
 def test_server_rtt_limit(client, monkeypatch):
     login(client, 'alice')
     token_id, _ = add_token(client)
-    monkeypatch.setattr(appmod, 'MAX_TOKEN_RTT_US', 3000)
-    assert scan(client, token_id, 3000)['proximity_verified'] is True
-    assert scan(client, token_id, 3001)['proximity_verified'] is False
+    monkeypatch.setattr(appmod, 'MAX_TOKEN_RTT_US', 2500)
+    assert scan(client, token_id, 2500)['proximity_verified'] is True
+    assert scan(client, token_id, 2501)['proximity_verified'] is False
 
 
 def test_revoked_token_not_credited(client):

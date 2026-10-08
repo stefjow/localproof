@@ -34,13 +34,13 @@
 #define LPX_ROUND_GAP_MS      2
 #define LPX_OPEN_TIMEOUT_MS   1500  // the token's ECDSA signature is slow; untimed
 
-// CALIBRATE THIS. It must sit above the honest median round trip on your
-// hardware and well below what an internet relay adds (typically 10+ ms
-// each way). Hold a token next to the station, read the "LPX rtt" lines
-// on serial over a few dozen sessions, and set this to roughly the worst
-// honest median plus 1 ms.
+// It must sit above the honest median round trip on your hardware and well
+// below what an internet relay adds (typically 10+ ms each way). Measured
+// on classic ESP32s (station 6b2831a8, token next to it, 2026-10-08): honest
+// medians 2050-2070 us, so 3 ms is the worst honest median plus about 1 ms.
+// Recalibrate from the "LPX rtt" serial lines for other hardware.
 #ifndef LPX_MAX_MEDIAN_RTT_US
-#define LPX_MAX_MEDIAN_RTT_US 6000
+#define LPX_MAX_MEDIAN_RTT_US 3000
 #endif
 
 // ------------------------------------------------------------------- types

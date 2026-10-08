@@ -70,8 +70,11 @@ not timed because an ATECC608B takes tens of milliseconds to sign.
 
 ## Calibrating the limit
 
-The default limit of 6 ms is a placeholder, not a measurement. With a
-token next to the station, watch serial for lines like
+The default limit is 3 ms. It comes from two classic ESP32s with the token
+next to the station, where every session's median fell between 2050 and
+2070 us (single rounds occasionally reach 5-7 ms; the median ignores them).
+For other hardware, hold a token next to the station and watch serial for
+lines like
 
 ```
 LPX rtt us: 1830 1795 1902 ...

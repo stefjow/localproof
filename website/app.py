@@ -47,7 +47,7 @@ CODE_FRESHNESS_SECONDS = 45
 # appends tokenId|medianRttUs to the signed payload. The server applies its
 # own limit on top of the station's, so it can be tightened without
 # reflashing stations. Keep it at or below LPX_MAX_MEDIAN_RTT_US.
-MAX_TOKEN_RTT_US = int(os.environ.get('MAX_TOKEN_RTT_US', '6000'))
+MAX_TOKEN_RTT_US = int(os.environ.get('MAX_TOKEN_RTT_US', '3000'))
 
 # Flask-Login setup
 login_manager = LoginManager()
