@@ -1,0 +1,186 @@
+{# Proximity tokens: the owner's list (revoke) and the add flow (install
+   firmware, read the key over WebSerial, register). Rendered client-side
+   from /api/my-tokens; loadTokens() is called by the drawer opener. #}
+<p class="hint">
+  A token is a small ESP32 you carry. Next to a station it answers timed
+  radio challenges, and your validations there count as proximity-verified.
+</p>
+<div id="tokens-empty" class="empty" style="display:none;">You haven't registered any tokens yet.</div>
+<div id="tokens-list"></div>
+
+<template id="token-card-template">
+  <article class="device-card">
+    <header class="device-head"><h2 class="device-name"></h2></header>
+    <dl class="device-meta">
+      <div><dt>Registered</dt><dd class="token-registered"></dd></div>
+    </dl>
+    <div class="device-actions">
+      <button class="btn-revoke danger">Revoke</button>
+    </div>
+  </article>
+</template>
+
+<div class="register-form" id="add-token-form">
+  <div class="reg-section">
+    <div class="reg-section-title">Add a token</div>
+    <div class="reg-unsupported" id="token-unsupported" hidden>
+      Setting up a token needs a USB connection to the board, which only
+      Chrome or Edge on a desktop can open.
+    </div>
+    <div class="from-device-section">
+      <esp-web-install-button manifest="/static/firmware/token-manifest.json">
+        <button slot="activate" type="button">Install token firmware</button>
+        <span slot="unsupported">Install requires Chrome or Edge on desktop.</span>
+        <span slot="not-allowed">Open this page over HTTPS to install.</span>
+      </esp-web-install-button>
+      <div class="from-device-hint">
+        Erasing the board gives the token a new key, so a reinstalled token
+        has to be registered again. If the install fails, hold BOOT while
+        clicking Install.
+      </div>
+      <button type="button" onclick="readTokenKey(this)">Read from token</button>
+      <div id="token-info" class="from-device-info"></div>
+    </div>
+    <div class="reg-status">
+      <div class="reg-status-row" id="token-status-key">Public key</div>
+    </div>
+    <details class="reg-pem">
+      <summary>Public key (PEM)</summary>
+      <textarea id="token-pubkey" rows="4" readonly
+                placeholder="filled in automatically by Read from token"></textarea>
+    </details>
+  </div>
+  <div class="register-actions">
+    <button type="button" id="token-register-btn" disabled onclick="registerToken(this)">Register Token</button>
+  </div>
+</div>
+
+<script>
+async function loadTokens() {
+  const tokens = await (await fetch('/api/my-tokens')).json();
+  const list = document.getElementById('tokens-list');
+  list.innerHTML = '';
+  document.getElementById('tokens-empty').style.display = tokens.length ? 'none' : 'block';
+  const tpl = document.getElementById('token-card-template');
+  for (const t of tokens) {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.querySelector('.device-name').textContent = t.token_id;
+    node.querySelector('.token-registered').textContent = t.timestamp;
+    node.querySelector('.btn-revoke').addEventListener('click', () => revokeToken(t.token_id));
+    list.appendChild(node);
+  }
+}
+
+async function revokeToken(tokenId) {
+  if (!confirm(`Revoke token ${tokenId}? Validations with it stop counting as proximity-verified.`)) return;
+  const data = await (await fetch(`/delete-token/${encodeURIComponent(tokenId)}`, { method: 'DELETE' })).json();
+  if (data.success) loadTokens();
+  else alert(data.message || 'Revoke failed');
+}
+
+function resetAddTokenForm() {
+  document.getElementById('token-pubkey').value = '';
+  document.querySelector('#add-token-form .reg-pem').open = false;
+  const info = document.getElementById('token-info');
+  info.className = 'from-device-info';
+  info.textContent = '';
+  updateTokenRegisterState();
+}
+
+function updateTokenRegisterState() {
+  const hasKey = document.getElementById('token-pubkey').value.trim() !== '';
+  document.getElementById('token-register-btn').disabled = !hasKey;
+  document.getElementById('token-status-key').classList.toggle('done', hasKey);
+}
+
+// The token prints "Token ID: <id> (...)" and "Pubkey: <X||Y hex>" at boot.
+// Unlike a station there is no GPS fix to wait for, so the read ends as
+// soon as the key arrives. Same reset caveat as readFromDevice: no
+// port.setSignals(), the user presses RESET.
+let currentTokenRead = null;
+
+async function readTokenKey(button) {
+  if (currentTokenRead) { currentTokenRead.cancel(); return; }
+  const info = document.getElementById('token-info');
+  let port;
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (err) {
+    if (err.name !== 'NotFoundError') alert('Could not open serial port: ' + err.message);
+    return;
+  }
+  info.className = 'from-device-info action';
+  info.textContent = 'Press the RESET (or EN) button on the token now.';
+
+  const decoder = new TextDecoderStream();
+  const readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
+  const reader = decoder.readable.getReader();
+  const timer = setTimeout(() => { reader.cancel().catch(() => {}); }, 60000);
+  currentTokenRead = { cancel: () => reader.cancel().catch(() => {}) };
+  button.textContent = 'Stop';
+
+  let buffer = '', tokenId = '', gotKey = false, readError = null;
+  try {
+    while (!gotKey) {
+      let value, done;
+      try { ({ value, done } = await reader.read()); }
+      catch (err) { readError = err; break; }
+      if (done) break;
+      buffer += value;
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        let m;
+        if ((m = line.match(/^Token ID:\s*([0-9a-fA-F]{8})/))) {
+          tokenId = m[1];
+          info.className = 'from-device-info';
+          info.textContent = `Token id: ${tokenId} — waiting for pubkey…`;
+        } else if ((m = line.match(/^Pubkey:\s*([0-9a-fA-F]{128})$/))) {
+          document.getElementById('token-pubkey').value = await xyHexToPem(m[1]);
+          gotKey = true;
+          updateTokenRegisterState();
+          info.className = 'from-device-info';
+          info.textContent = `Token id: ${tokenId || '?'} — ready to register.`;
+          break;
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    try { await reader.cancel(); } catch (e) {}
+    try { await readableClosed; } catch (e) {}
+    try { await port.close(); } catch (e) {}
+    currentTokenRead = null;
+  }
+  button.textContent = gotKey ? 'Read again' : 'Read from token';
+  if (readError) {
+    info.textContent = `Serial connection lost (${readError.name}). Unplug and replug the USB cable, then try again.`;
+  } else if (!gotKey) {
+    info.textContent = 'No Pubkey: line arrived. Click Read from token and press RESET on the token.';
+  }
+}
+
+async function registerToken(button) {
+  const pubkey = document.getElementById('token-pubkey').value.trim();
+  if (!pubkey) return;
+  button.disabled = true;
+  button.textContent = 'Registering…';
+  try {
+    const data = await (await fetch('/add-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pubkey }),
+    })).json();
+    if (!data.success) { alert('Failed to register token: ' + data.message); return; }
+    resetAddTokenForm();
+    loadTokens();
+  } catch (err) {
+    alert('An error occurred: ' + err.message);
+  } finally {
+    button.textContent = 'Register Token';
+    updateTokenRegisterState();
+  }
+}
+</script>

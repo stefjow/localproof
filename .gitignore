@@ -36,3 +36,5 @@ venv/
 
 # Ignore adding devices with secrets
 /website/add_devices.py
+# Ignore arduino-cli build output
+build/

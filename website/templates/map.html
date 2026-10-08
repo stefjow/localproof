@@ -55,6 +55,8 @@
 
         <div id="validations-drawer" hidden>{% include '_validations_panel.html' %}</div>
 
+        <div id="tokens-drawer" hidden>{% include '_tokens_panel.html' %}</div>
+
         <div id="add-device-drawer" class="register-form" hidden>
 
           <div class="reg-unsupported" id="reg-unsupported" hidden>
@@ -422,6 +424,7 @@
             {% if current_user.is_authenticated %}
             'devices-drawer':     { title: 'Devices',        nav: 'nav-my-devices',     load: () => loadDevices() },
             'validations-drawer': { title: 'Validations',    nav: 'nav-my-validations', load: () => loadValidations() },
+            'tokens-drawer':      { title: 'Tokens',         nav: 'nav-tokens',         load: () => { loadTokens(); resetAddTokenForm(); } },
             'add-device-drawer':  { title: 'Add Device',     nav: 'nav-add-device',     load: () => resetAddDeviceForm() },
             {% endif %}
         };
@@ -454,6 +457,7 @@
 
         // Per-panel cleanup when it stops being visible.
         function teardownPanel(id) {
+            if (id === 'tokens-drawer' && currentTokenRead) currentTokenRead.cancel();
             if (id !== 'add-device-drawer') return;
             if (currentRead) currentRead.cancel();
             clearPendingPin();
@@ -550,9 +554,11 @@
         // work down the panel and hit a dead button.
         (function flagSerialSupport() {
             if (navigator.serial) return;
-            document.getElementById('reg-unsupported').hidden = false;
-            document.querySelector('#add-device-drawer .from-device-section')
-                .querySelectorAll('button').forEach(b => { b.disabled = true; });
+            for (const [note, panel] of [['reg-unsupported', 'add-device-drawer'], ['token-unsupported', 'tokens-drawer']]) {
+                document.getElementById(note).hidden = false;
+                document.querySelector(`#${panel} .from-device-section`)
+                    .querySelectorAll('button').forEach(b => { b.disabled = true; });
+            }
         })();
 
         // The device reports its own position over serial, so registration
@@ -580,6 +586,7 @@
             'nav-add-device': () => openDrawer('add-device-drawer'),
             'nav-my-devices': () => openDrawer('devices-drawer'),
             'nav-my-validations': () => openDrawer('validations-drawer'),
+            'nav-tokens': () => openDrawer('tokens-drawer'),
         };
         for (const [navId, open] of Object.entries(NAV_OVERLAYS)) {
             const el = document.getElementById(navId);
@@ -614,10 +621,12 @@
                     } catch (e) {}
                     setTimeout(() => d.remove(), 400);
                 });
-                const info = document.getElementById('reg-device-info');
+                // Both the station and the token installer land here.
+                const isToken = openPanelId === 'tokens-drawer';
+                const info = document.getElementById(isToken ? 'token-info' : 'reg-device-info');
                 if (info) {
                     info.className = 'from-device-info action';
-                    info.textContent = 'Firmware installed. Click "Read from device" next.';
+                    info.textContent = `Firmware installed. Click "Read from ${isToken ? 'token' : 'device'}" next.`;
                 }
             }, 500);
         }
@@ -632,6 +641,7 @@
             else if (params.get('add') === '1') openDrawer('add-device-drawer');
             else if (params.get('devices') === '1') openDrawer('devices-drawer');
             else if (params.get('validations') === '1') openDrawer('validations-drawer');
+            else if (params.get('tokens') === '1') openDrawer('tokens-drawer');
             if (params.toString()) history.replaceState(null, '', location.pathname);
         })();
 
