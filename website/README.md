@@ -12,6 +12,11 @@ This directory contains the Flask backend and frontend for the web app.
   Every scan must complete a one-time nonce challenge within 15 seconds,
   and the scanner's browser geolocation is cross-checked against the
   device's registered position.
+- **Proximity tokens**: The Tokens panel installs token firmware over
+  WebSerial and registers tokens. A scan whose QR attests the scanner's own
+  token is logged with its round-trip time; tokens with Wi-Fi upload the
+  same signed code to `/api/token-proof`. See
+  [PROXIMITY.md](../esp32/PROXIMITY.md).
 - **Database**: SQLite database for storing devices (public keys) and
   validation logs. `create_database.py` also carries the schema
   migrations and is safe to re-run.

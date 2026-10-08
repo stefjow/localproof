@@ -50,6 +50,8 @@ the QR, a sniffed frame) can at most credit the owner.
   clock and is signed, so the server accepts codes up to 7 days old
   (`TOKEN_PROOF_MAX_AGE_SECONDS`). A token that saw no known network keeps
   up to 16 codes in NVS and uploads them the next time it is on near one.
+  The validation is logged at the station's time, not the upload's; one
+  that arrives more than 5 min late says "uploaded 3 h later" in its reason.
 - **Counts once.** An upload and the owner's QR scan of the same code are
   one validation, whichever comes first. A token upload counts toward the
   station's `max_validations` like a scan.
@@ -130,5 +132,7 @@ without reflashing stations.
 Hardware-tested on 2026-10-08 with two classic ESP32s (station with
 ATECC608B, token with a software key): sessions pass every cycle at a
 median of about 2050 us, and QR version 9 scans fine on the e-paper. The
-token upload (`LPX_ATTEST`, `/api/token-proof`) is covered by the server
-tests; its radio and Wi-Fi path still needs a run on hardware.
+token upload (`LPX_ATTEST`, `/api/token-proof`) passed end to end against
+the live server the same day. The LED states are untested: the bench
+token's only LED shows serial activity, so `TOKEN_LED` drives nothing
+there.

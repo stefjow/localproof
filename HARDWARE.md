@@ -18,7 +18,7 @@ The device is designed to work fully offline: it derives time and location from 
 
 1. **Boot.** The device waits for a full GPS time and location fix before doing anything else. The display shows a "Searching for GPS" screen and the serial port prints satellite diagnostics (`chars`, `sats`, `hdop`, `inview`, `snr`) every 10 seconds. There is no timeout — a cold start can take a long time on a poor sky view. Once fixed, the RTC is set and the location is written to NVS; deep-sleep wakes within the same power cycle reuse the stored fix.
 2. **Signing.** Every 30 seconds the device builds `device_id|timestamp|lat|lng`, takes its SHA-256 digest, and signs the digest with ECDSA P-256 — inside the ATECC608 (~140 ms) if present, otherwise in software via mbedtls as a fallback.
-3. **QR.** Payload and signature are base64url-encoded into a URL of the form `https://localproof.libmap.org/v2/<id>/<payload>/<sig>` and rendered as a version-8 QR (49×49 modules). Nothing in the URL is secret; the value is that only this device could have signed it, and only within the last 45 seconds.
+3. **QR.** Payload and signature are base64url-encoded into a URL of the form `https://localproof.libmap.org/v2/<id>/<payload>/<sig>` and rendered as a version-8 QR (49×49 modules), or version 9 (53×53) when it carries a [proximity token](esp32/PROXIMITY.md) attestation. Nothing in the URL is secret; the value is that only this device could have signed it, and only within the last 45 seconds.
 4. **Sleep.** The ESP32 deep-sleeps until the next 30 s boundary. The DS3231 keeps time across sleep.
 
 ![QR on display](pictures/screen.jpeg)
