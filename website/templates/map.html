@@ -419,6 +419,8 @@
         const SCAN_DEVICE = {{ scan_device|default(none)|tojson }};
         // How long the server accepts the answer to its nonce.
         const NONCE_TTL_S = {{ nonce_ttl|default(none)|tojson }};
+        // How long a logged-out scan can be claimed by logging in.
+        const CLAIM_MINUTES = {{ claim_minutes|tojson }};
 
         const RESULT_BADGES = {
             ok: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
@@ -530,6 +532,11 @@
         // up here for a failure the server never saw); scannerPos is the
         // browser's position, if it shared one.
         function showScanResult(data, scannerPos) {
+            // The scan is over. Leave its URL, so that reloading the page or
+            // logging in does not send the same code through validation
+            // again (it would fail, and be logged as a failed attempt).
+            if (location.pathname.startsWith('/v2/')) history.replaceState(null, '', '/');
+
             const deviceId = data.device_id || (SCAN_DEVICE && SCAN_DEVICE.device_id) || '';
             const name = data.device_name || (SCAN_DEVICE && SCAN_DEVICE.name) || deviceId;
             const when = new Date().toLocaleString('en-GB', {
@@ -560,7 +567,19 @@
                             openDrawer('validations-drawer');
                         });
                         p.append('Saved to ', link, ` as ${CURRENT_USER}.`);
-                    } : 'Recorded without an account.',
+                    } : (p) => {
+                        // The server lets this browser claim the scan by
+                        // logging in; the form is the rail's header.
+                        const link = document.createElement('a');
+                        link.href = '#';
+                        link.textContent = 'Log in';
+                        link.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            document.getElementById('username').focus();
+                        });
+                        p.append('Not saved to an account yet. ', link,
+                                 ` within ${CLAIM_MINUTES} minutes to add it to your validations.`);
+                    },
                 });
             } else {
                 const f = SCAN_FAILURES[data.status]

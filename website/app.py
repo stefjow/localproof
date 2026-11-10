@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, session
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import sqlite3
 from Crypto.PublicKey import ECC
@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import secrets
+import time
 from math import radians, sin, cos, asin, sqrt
 from dotenv import load_dotenv
 
@@ -56,6 +57,17 @@ MAX_TOKEN_RTT_US = int(os.environ.get('MAX_TOKEN_RTT_US', '3000'))
 TOKEN_PROOF_MAX_AGE_SECONDS = 7 * 24 * 3600
 # Uploads later than this say so in the logged reason.
 TOKEN_PROOF_LATE_SECONDS = 5 * 60
+
+# A scan made while logged out is logged as "unknown". The browser that made
+# it can still claim it: logging in within this window attributes the
+# validation to that account. The browser's session remembers the last few.
+CLAIM_WINDOW_SECONDS = 10 * 60
+MAX_UNCLAIMED_SCANS = 5
+
+
+@app.context_processor
+def inject_claim_window():
+    return {'claim_minutes': CLAIM_WINDOW_SECONDS // 60}
 
 # Flask-Login setup
 login_manager = LoginManager()
@@ -164,7 +176,8 @@ def login():
     if user and verify_password(password, user['password']):
         user_obj = User(user['id'], user['username'])
         login_user(user_obj)
-        return jsonify({'success': True, 'username': user['username']})
+        return jsonify({'success': True, 'username': user['username'],
+                        'claimed': claim_scans(user['username'])})
     return jsonify({'success': False, 'error': 'Invalid username or password'})
 
 @app.route('/register', methods=['POST'])
@@ -254,16 +267,56 @@ def get_my_validations():
     conn.close()
     return jsonify([dict(log) for log in logs])
 
+def remember_unclaimed_scan(log_id):
+    """Note a logged-out scan in the browser's session, so that logging in
+    shortly afterwards can claim it (claim_scans)."""
+    now = int(time.time())
+    scans = [s for s in session.get('unclaimed', []) if now - s[1] <= CLAIM_WINDOW_SECONDS]
+    scans.append([log_id, now])
+    session['unclaimed'] = scans[-MAX_UNCLAIMED_SCANS:]
+
+
+def claim_scans(username):
+    """Attribute this browser's logged-out scans to the account that has
+    just logged in, and return how many. A scan qualifies if it succeeded,
+    is still logged as "unknown" and is no older than CLAIM_WINDOW_SECONDS.
+    It is skipped if the account already has a validation for the same code
+    (its token may have uploaded it), as one code counts once per person."""
+    scans = session.pop('unclaimed', [])
+    now = time.time()
+    claimed = 0
+    conn = get_db_connection()
+    for log_id, scanned_at in scans:
+        if now - scanned_at > CLAIM_WINDOW_SECONDS:
+            continue
+        row = conn.execute(
+            """SELECT device_id, code_ts FROM validation_logs
+               WHERE id = ? AND username = 'unknown' AND status = 'success'""",
+            (log_id,)).fetchone()
+        if not row:
+            continue
+        if conn.execute(
+                """SELECT 1 FROM validation_logs WHERE device_id = ? AND code_ts = ?
+                   AND username = ? AND status = 'success'""",
+                (row['device_id'], row['code_ts'], username)).fetchone():
+            continue
+        conn.execute('UPDATE validation_logs SET username = ? WHERE id = ?', (username, log_id))
+        claimed += 1
+    conn.commit()
+    conn.close()
+    return claimed
+
+
 # Update validation logs to include username
 def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=None, scanner_lng=None, code_ts=None,
                    token_id=None, token_rtt_us=None, username=None, at=None):
-    """at: when it happened (UTC datetime), if not now."""
+    """at: when it happened (UTC datetime), if not now. Returns the row id."""
     if username is None:
         username = current_user.username if current_user.is_authenticated else "unknown"
     if at is None:
         at = datetime.datetime.utcnow()
     conn = get_db_connection()
-    conn.execute('''
+    log_id = conn.execute('''
         INSERT INTO validation_logs (timestamp, device_id, status, reason, lat, lng, ip, username, scanner_lat, scanner_lng, code_ts,
                                      token_id, token_rtt_us)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -281,9 +334,10 @@ def log_validation(device_id, status, reason, lat=None, lng=None, scanner_lat=No
         code_ts,
         token_id,
         token_rtt_us
-    ))
+    )).lastrowid
     conn.commit()
     conn.close()
+    return log_id
 
 @app.route('/validation-logs/<device_id>', methods=['GET'])
 def get_validation_logs(device_id):
@@ -479,8 +533,10 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
         reason += f" + Proximity ({token_rtt_us} us)"
     else:
         token_id, token_rtt_us = None, None
-    log_validation(device_id, "success", reason, esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts,
-                   token_id=token_id, token_rtt_us=token_rtt_us)
+    log_id = log_validation(device_id, "success", reason, esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts,
+                            token_id=token_id, token_rtt_us=token_rtt_us)
+    if not current_user.is_authenticated:
+        remember_unclaimed_scan(log_id)
 
     conn.execute('UPDATE devices SET active = TRUE WHERE device_id = ?', (device_id,))
     conn.commit()

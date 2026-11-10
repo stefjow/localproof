@@ -51,7 +51,9 @@
       body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
     });
     const data = await r.json();
-    if (data.success) { location.reload(); }
+    // Logging in claims what this browser scanned while logged out; show
+    // where those scans went.
+    if (data.success) { if (data.claimed) location.href = '/?validations=1'; else location.reload(); }
     else { alert(data.error || 'Login failed'); }
   }
   async function register() {

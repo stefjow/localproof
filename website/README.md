@@ -11,7 +11,9 @@ This directory contains the Flask backend and frontend for the web app.
   (`/v2/<id>/<payload>/<signature>`).
   Every scan must complete a one-time nonce challenge within 15 seconds,
   and the scanner's browser geolocation is cross-checked against the
-  device's registered position.
+  device's registered position. A scan made while logged out can be
+  claimed: logging in from the same browser within 10 minutes adds it to
+  that account's validations.
 - **Proximity tokens**: The Tokens panel installs token firmware over
   WebSerial and registers tokens. A scan whose QR attests the scanner's own
   token is logged with its round-trip time; tokens with Wi-Fi upload the
