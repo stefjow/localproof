@@ -10,29 +10,8 @@
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="/static/style.css">
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
-    <style>
-        .overlay-circle {
-            background: {% if nonce %}rgba(100, 100, 100, 1){% elif success == 'true' %}rgba(0, 97, 100, 1){% else %}rgba(219, 67, 37, 1){% endif %};
-        }
-    </style>
 </head>
 <body class="page page-map">
-    {% if status or nonce %}
-    <div class="overlay" id="status-overlay">
-        <div class="overlay-circle" id="overlay-circle">
-            <svg viewBox="0 0 100 100">
-                {% if nonce %}
-                <text id="overlay-mark" x="50" y="55" text-anchor="middle" dominant-baseline="middle">?</text>
-                {% elif success == 'true' %}
-                <text x="50" y="60" text-anchor="middle" dominant-baseline="middle">✓</text>
-                {% else %}
-                <text x="50" y="55" text-anchor="middle" dominant-baseline="middle">✗</text>
-                {% endif %}
-            </svg>
-        </div>
-        <div class="overlay-status" id="overlay-status-text">{{ status or 'Verifying presence…' }}</div>
-    </div>
-    {% endif %}
     <div id="map"></div>
 
     {# One right-hand rail: the auth card is its header and the panels render
@@ -46,6 +25,9 @@
         <button type="button" class="rail-close" onclick="closeAllOverlays()" aria-label="Close">&times;</button>
       </div>
       <div class="rail-content">
+
+        {# Public: the verdict of a scanned QR, filled in by showScanResult(). #}
+        <div id="result-drawer" role="status" hidden></div>
 
         {# Public: any device's history can be opened from its map popup. #}
         <div id="history-drawer" hidden>{% include '_history_panel.html' %}</div>
@@ -168,7 +150,23 @@
         // close together, or a scan result, would land at zoom 19 to 22.
         function fitTo(b, padding, maxZoom) {
             const cam = map.cameraForBounds(b, { padding });
-            if (cam) map.jumpTo({ center: cam.center, zoom: Math.min(cam.zoom, maxZoom) });
+            if (!cam) return;
+            if (cam.zoom <= maxZoom) {
+                map.jumpTo({ center: cam.center, zoom: cam.zoom });
+                return;
+            }
+            // Capped. cam.center is right for the deeper zoom only, where
+            // uneven padding shifts it by far less ground, so centre the
+            // bounds at the capped zoom and then move them to the middle of
+            // the padded area.
+            map.jumpTo({ center: b.getCenter(), zoom: maxZoom });
+            const p = typeof padding === 'number'
+                ? { top: padding, bottom: padding, left: padding, right: padding } : padding;
+            const dx = (p.left - p.right) / 2, dy = (p.top - p.bottom) / 2;
+            if (dx || dy) {
+                const { width, height } = map.getCanvas().getBoundingClientRect();
+                map.jumpTo({ center: map.unproject([width / 2 - dx, height / 2 - dy]) });
+            }
         }
 
         // Device names, usernames and the ids in a scanned URL are all
@@ -177,13 +175,6 @@
         function escapeHtml(value) {
             return String(value ?? '').replace(/[&<>"']/g, c => (
                 { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        }
-
-        function makeEmojiMarker(emoji) {
-            const el = document.createElement('div');
-            el.className = 'emoji-marker';
-            el.textContent = emoji;
-            return new maplibregl.Marker({ element: el });
         }
 
         async function fetchValidationLogs(deviceId) {
@@ -332,24 +323,6 @@
         {% endif %}
         {% endfor %}
 
-        {% if esp_lat and esp_lng %}
-        (function () {
-            const espMarker = makeEmojiMarker('🛰️')
-                .setLngLat([{{ esp_lng }}, {{ esp_lat }}])
-                .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(`
-                    <div class="popup-headline">Device Location (from ESP32 GPS)</div>
-                    <div class="popup-content">
-                        Location: ${roundToFourDecimals({{ esp_lat }})}, ${roundToFourDecimals({{ esp_lng }})}
-                    </div>`))
-                .addTo(map);
-            markers.push(espMarker);
-            bounds.extend([{{ esp_lng }}, {{ esp_lat }}]);
-            {% if device_lat and device_lng %}
-            bounds.extend([{{ device_lng }}, {{ device_lat }}]);
-            {% endif %}
-            map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 0 });
-        })();
-        {% else %}
         // Arrive on the registered devices rather than on the whole globe.
         // maxZoom keeps a lone device from filling the screen at street level.
         // One device is handled by the constructor above; several need the
@@ -359,121 +332,6 @@
             if (skipInitialFit || ACTIVE_DEVICES.length < 2) return;
             fitTo(bounds, 80, 13);
         });
-        {% endif %}
-
-        // The overlay goes away 10 seconds after it shows a result, or on a
-        // click or key press. While a scan is still being verified it stays
-        // up and cannot be dismissed: answering the location prompt can take
-        // longer than 10 seconds, and the result must not land on an overlay
-        // that is already hidden.
-        let overlayHasResult = false;
-        function armOverlayDismiss() {
-            const overlay = document.getElementById('status-overlay');
-            if (!overlay) return;
-            overlayHasResult = true;
-            setTimeout(() => { overlay.style.display = 'none'; }, 10000);
-        }
-        (function () {
-            const overlay = document.getElementById('status-overlay');
-            if (!overlay) return;
-            const hide = () => { if (overlayHasResult) overlay.style.display = 'none'; };
-            overlay.addEventListener('click', hide);
-            document.addEventListener('keydown', hide);
-            {% if not nonce %}armOverlayDismiss();  // rendered with its result{% endif %}
-        })();
-
-        // Challenge flow: answer the server's nonce with our geolocation, then render the result.
-        {% if nonce %}
-        (function () {
-            let scannerPos = null;
-            // The server stops accepting the nonce after this long.
-            const NONCE_TTL_MS = {{ nonce_ttl|tojson }} * 1000;
-            let sent = false;
-
-            function completeValidation() {
-                if (sent) return;
-                sent = true;
-                const body = { nonce: '{{ nonce }}' };
-                if (scannerPos) {
-                    body.scanner_lat = scannerPos.coords.latitude;
-                    body.scanner_lng = scannerPos.coords.longitude;
-                }
-                // A request that never comes back must still end in a result.
-                const abort = new AbortController();
-                setTimeout(() => abort.abort(), 20000);
-                fetch('/validate/complete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                    signal: abort.signal,
-                })
-                .then(r => r.json())
-                .then(showResult)
-                .catch(() => showResult({ success: false, status: 'Validation Error' }));
-            }
-
-            // If the location prompt is never answered, neither callback
-            // below fires. Once the nonce has run out there is nothing left
-            // to wait for, so say what the server would say.
-            setTimeout(() => {
-                if (sent) return;
-                sent = true;
-                showResult({ success: false, status: 'Challenge Expired' });
-            }, NONCE_TTL_MS);
-
-            function showResult(data) {
-                document.getElementById('overlay-circle').style.background =
-                    data.success ? 'rgba(0, 97, 100, 1)' : 'rgba(219, 67, 37, 1)';
-                document.getElementById('overlay-mark').textContent = data.success ? '✓' : '✗';
-                document.getElementById('overlay-status-text').textContent = data.status;
-                armOverlayDismiss();
-
-                if (data.esp_lat && data.esp_lng) {
-                    const espMarker = makeEmojiMarker('🛰️')
-                        .setLngLat([data.esp_lng, data.esp_lat])
-                        .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(`
-                            <div class="popup-headline">Device Location (from ESP32 GPS)</div>
-                            <div class="popup-content">
-                                Location: ${roundToFourDecimals(data.esp_lat)}, ${roundToFourDecimals(data.esp_lng)}
-                            </div>`))
-                        .addTo(map);
-                    markers.push(espMarker);
-
-                    const b = new maplibregl.LngLatBounds();
-                    b.extend([data.esp_lng, data.esp_lat]);
-
-                    if (scannerPos) {
-                        const sm = makeEmojiMarker('📱')
-                            .setLngLat([scannerPos.coords.longitude, scannerPos.coords.latitude])
-                            .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(`
-                                <div class="popup-headline">Your Location (from Browser)</div>
-                                <div class="popup-content">
-                                    Location: ${roundToFourDecimals(scannerPos.coords.latitude)}, ${roundToFourDecimals(scannerPos.coords.longitude)}
-                                </div>`))
-                            .addTo(map);
-                        markers.push(sm);
-                        b.extend([scannerPos.coords.longitude, scannerPos.coords.latitude]);
-                    }
-                    if (data.device_lat && data.device_lng) b.extend([data.device_lng, data.device_lat]);
-                    // The result can arrive before the map has loaded; without
-                    // this the arrival fit would then zoom back out to all
-                    // devices.
-                    skipInitialFit = true;
-                    fitTo(b, 60, 15);
-                }
-            }
-
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (p) => { scannerPos = p; completeValidation(); },
-                    () => { completeValidation(); },
-                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 }
-                );
-            } else {
-                completeValidation();
-            }
-        })();
-        {% endif %}
 
         // -- Rail panels -------------------------------------------------------
         // The map is the app shell; every panel opens inside the right-hand
@@ -484,7 +342,9 @@
         // Escape closes it, nothing else, so an in-flight serial read cannot
         // be cancelled by a stray click.
         const PANELS = {
-            // Public — reachable from any device's map popup.
+            // Public — the verdict of a scan, and any device's history
+            // from its map popup.
+            'result-drawer':      { title: 'Scan result',    nav: null, load: () => {} },
             'history-drawer':     { title: 'Device History', nav: null, load: () => {} },
             {% if current_user.is_authenticated %}
             'devices-drawer':     { title: 'Devices',        nav: 'nav-my-devices',     load: () => loadDevices() },
@@ -505,6 +365,9 @@
             document.getElementById('rail-title').textContent = title || PANELS[id].title;
             document.getElementById('rail-body').hidden = false;
             sideRail.classList.add('expanded');
+            // The scan result is only as tall as its content, so the device
+            // it is about stays visible on the map.
+            sideRail.classList.toggle('compact', id === 'result-drawer');
             openPanelId = id;
             syncNavState();
         }
@@ -515,7 +378,7 @@
             if (openPanelId) teardownPanel(openPanelId);
             const body = document.getElementById('rail-body');
             if (body) body.hidden = true;
-            sideRail.classList.remove('expanded');
+            sideRail.classList.remove('expanded', 'compact');
             openPanelId = null;
             syncNavState();
         }
@@ -547,6 +410,253 @@
             closeAllOverlays();
             if (typeof toggleNavMenu === 'function') toggleNavMenu(false);
         });
+
+        // -- Scan result -------------------------------------------------------
+        // Opening a device's QR lands here. The verdict is a rail panel like
+        // the others and stays until it is closed.
+        const LOGGED_IN = {{ current_user.is_authenticated|tojson }};
+        // The device being scanned, if the server knows it.
+        const SCAN_DEVICE = {{ scan_device|default(none)|tojson }};
+        // How long the server accepts the answer to its nonce.
+        const NONCE_TTL_S = {{ nonce_ttl|default(none)|tojson }};
+
+        const RESULT_BADGES = {
+            ok: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+            failed: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
+            pending: '<span class="result-spinner" aria-hidden="true"></span>',
+        };
+        const RESULT_MARKS = { ok: '✓', off: '○', bad: '✕' };
+
+        function distanceText(m) {
+            return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
+        }
+
+        // Each way a scan can fail, in the scanner's terms: the check that
+        // failed and what to do about it. `signed` marks the failures the
+        // server only reaches after it has verified the signature.
+        const SCAN_FAILURES = {
+            'Location Mismatch': {
+                signed: true,
+                check: 'Your location does not match',
+                detail: d => d.distance_m != null ? `${distanceText(d.distance_m)} away` : '',
+                note: d => (d.distance_m != null
+                    ? `This phone reports a position ${distanceText(d.distance_m)} from the device. `
+                    : 'This phone reports a position too far from the device. ')
+                    + 'Scan the code again when you are next to it.',
+            },
+            'Code Expired': {
+                signed: true,
+                check: 'The code has expired',
+                note: () => 'The device shows a new code every 30 seconds. Scan the one on its screen now.',
+            },
+            'Max Validations Exceeded': {
+                signed: true,
+                check: 'This code was already used',
+                note: () => 'The device shows a new code every 30 seconds. Wait for the next one and scan again.',
+            },
+            'Invalid Signature': {
+                check: 'Not signed by this device',
+                note: () => 'The code does not match the key registered for this device. Scan the code on the device itself.',
+            },
+            'Invalid Data Format': {
+                check: 'The code could not be read',
+                note: () => 'Scan the code on the device again.',
+            },
+            'Challenge Expired': {
+                check: 'No answer in time',
+                note: () => `The check has to finish within ${NONCE_TTL_S || 15} seconds. Scan the code again and allow location access when asked.`,
+            },
+            'Invalid or Reused Challenge': {
+                check: 'This scan was already completed',
+                note: () => 'Each scan counts once. Scan the code on the device again.',
+            },
+            'Invalid Device ID': {
+                check: 'Unknown device',
+                note: () => 'This code does not belong to a registered device.',
+            },
+            'Validation Error': {
+                check: 'No answer from the server',
+                note: () => 'Check your connection and scan the code again.',
+            },
+        };
+
+        // card: { kind, title, sub, rows: [{ state, text, detail }], note }.
+        // note is a string, or a function that fills the paragraph itself.
+        function renderScanCard(card) {
+            const el = document.getElementById('result-drawer');
+            el.innerHTML = `
+                <div class="result-head">
+                    <div class="result-badge ${card.kind}">${RESULT_BADGES[card.kind]}</div>
+                    <div>
+                        <div class="result-title">${escapeHtml(card.title)}</div>
+                        <div class="result-when">${escapeHtml(card.sub)}</div>
+                    </div>
+                </div>
+                ${card.rows.length ? `<ul class="result-checks">${card.rows.map(r => `
+                    <li class="${r.state}">
+                        <span class="mark">${RESULT_MARKS[r.state]}</span>
+                        <span>${escapeHtml(r.text)}</span>
+                        <span class="detail">${escapeHtml(r.detail)}</span>
+                    </li>`).join('')}</ul>` : ''}
+                <p class="result-note"></p>`;
+            const note = el.querySelector('.result-note');
+            if (typeof card.note === 'function') card.note(note);
+            else note.textContent = card.note;
+            openDrawer('result-drawer');
+        }
+
+        function showScanPending() {
+            renderScanCard({
+                kind: 'pending',
+                title: 'Verifying presence…',
+                sub: (SCAN_DEVICE && (SCAN_DEVICE.name || SCAN_DEVICE.device_id)) || '',
+                rows: [],
+                note: 'Allow location access if your browser asks.',
+            });
+        }
+
+        // Padding that keeps a fit clear of the open rail: below it on a
+        // phone, where it spans the width, and left of it on a desktop.
+        function railPadding(margin) {
+            const r = sideRail.getBoundingClientRect();
+            return phone
+                ? { top: r.bottom + margin, bottom: margin + 30, left: margin, right: margin }
+                : { top: margin, bottom: margin, left: margin, right: innerWidth - r.left + margin };
+        }
+
+        let youMarker = null;
+
+        // data is the answer of /validate/complete (or the same shape made
+        // up here for a failure the server never saw); scannerPos is the
+        // browser's position, if it shared one.
+        function showScanResult(data, scannerPos) {
+            const deviceId = data.device_id || (SCAN_DEVICE && SCAN_DEVICE.device_id) || '';
+            const name = data.device_name || (SCAN_DEVICE && SCAN_DEVICE.name) || deviceId;
+            const when = new Date().toLocaleString('en-GB', {
+                day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+            if (data.success) {
+                renderScanCard({
+                    kind: 'ok',
+                    title: name ? `Verified at ${name}` : 'Verified',
+                    sub: when,
+                    rows: [
+                        { state: 'ok', text: 'Signed by this device' },
+                        data.location_verified
+                            ? { state: 'ok', text: 'Your location matches',
+                                detail: data.distance_m != null ? `${distanceText(data.distance_m)} away` : '' }
+                            : { state: 'off', text: scannerPos ? 'Location not checked' : 'Location not shared' },
+                        data.proximity_verified
+                            ? { state: 'ok', text: 'Your token was in range',
+                                detail: data.token_rtt_us != null ? `${(data.token_rtt_us / 1000).toFixed(1)} ms` : '' }
+                            : { state: 'off', text: 'No token used' },
+                    ],
+                    note: LOGGED_IN ? (p) => {
+                        const link = document.createElement('a');
+                        link.href = '/?validations=1';
+                        link.textContent = 'your validations';
+                        link.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            openDrawer('validations-drawer');
+                        });
+                        p.append('Saved to ', link, ` as ${CURRENT_USER}.`);
+                    } : 'Recorded without an account.',
+                });
+            } else {
+                const f = SCAN_FAILURES[data.status]
+                    || { check: data.status || 'The check failed', note: () => 'Scan the code on the device again.' };
+                const rows = f.signed ? [{ state: 'ok', text: 'Signed by this device' }] : [];
+                rows.push({ state: 'bad', text: f.check, detail: f.detail ? f.detail(data) : '' });
+                renderScanCard({
+                    kind: 'failed',
+                    title: 'Not verified',
+                    sub: name ? `${name}, ${when}` : when,
+                    rows,
+                    note: f.note(data),
+                });
+            }
+
+            // The map shows the device and, if the browser shared it, where
+            // the scanner is. A failed scan mostly comes back without
+            // coordinates, so the device's pin on the page stands in.
+            const pin = markers.find(m => m._device && m._device.device_id === deviceId);
+            const devicePos = (data.device_lat != null && data.device_lng != null)
+                ? [data.device_lng, data.device_lat]
+                : (pin ? pin.getLngLat().wrap().toArray() : null);
+            const b = new maplibregl.LngLatBounds();
+            if (devicePos) b.extend(devicePos);
+            if (scannerPos) {
+                const you = [scannerPos.coords.longitude, scannerPos.coords.latitude];
+                const el = document.createElement('div');
+                el.className = 'you-dot';
+                el.title = 'Your position';
+                if (youMarker) youMarker.remove();
+                youMarker = new maplibregl.Marker({ element: el }).setLngLat(you).addTo(map);
+                b.extend(you);
+            }
+            if (!b.isEmpty()) {
+                // The result can arrive before the map has loaded; without
+                // this the arrival fit would then zoom back out to all
+                // devices.
+                skipInitialFit = true;
+                fitTo(b, railPadding(80), 16);
+            }
+        }
+
+        // Challenge flow: answer the server's nonce with our geolocation,
+        // then show the result. Until then the panel says it is verifying:
+        // answering the location prompt can take a while.
+        {% if nonce %}
+        (function () {
+            let scannerPos = null;
+            let sent = false;
+            showScanPending();
+
+            function completeValidation() {
+                if (sent) return;
+                sent = true;
+                const body = { nonce: '{{ nonce }}' };
+                if (scannerPos) {
+                    body.scanner_lat = scannerPos.coords.latitude;
+                    body.scanner_lng = scannerPos.coords.longitude;
+                }
+                // A request that never comes back must still end in a result.
+                const abort = new AbortController();
+                setTimeout(() => abort.abort(), 20000);
+                fetch('/validate/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: abort.signal,
+                })
+                .then(r => r.json())
+                .then(data => showScanResult(data, scannerPos))
+                .catch(() => showScanResult({ success: false, status: 'Validation Error' }, scannerPos));
+            }
+
+            // If the location prompt is never answered, neither callback
+            // below fires. Once the nonce has run out there is nothing left
+            // to wait for, so say what the server would say.
+            setTimeout(() => {
+                if (sent) return;
+                sent = true;
+                showScanResult({ success: false, status: 'Challenge Expired' }, null);
+            }, NONCE_TTL_S * 1000);
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (p) => { scannerPos = p; completeValidation(); },
+                    () => { completeValidation(); },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 }
+                );
+            } else {
+                completeValidation();
+            }
+        })();
+        {% elif status %}
+        // The server already knew the answer when it rendered the page.
+        showScanResult({ success: false, status: {{ status|tojson }} }, null);
+        {% endif %}
 
         {% if current_user.is_authenticated %}
 

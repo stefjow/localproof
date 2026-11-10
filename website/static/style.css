@@ -300,6 +300,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* Phone: the header is one full-width bar in both states (name left,
      burger right), so it never changes shape when a panel opens below it. */
   #side-rail.authed { left: 8px; width: auto; }
+  #side-rail.compact:not(.authed) { width: auto; }
   #side-rail.authed #user-info { position: relative; gap: 10px; padding: 8px 8px 8px 10px; }
   #side-rail.authed .user-chip { flex: 1; }
   #user-info .nav-toggle { display: inline-flex; }
@@ -322,8 +323,6 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .rail-content { padding: 12px; }
   .rail-content .device-meta { grid-template-columns: 1fr; }
   .rail-content .validations-table td { grid-template-columns: 100px 1fr; }
-  .overlay-circle { width: 200px; height: 200px; }
-  .overlay-status { font-size: 1.1rem; }
 
   /* Under 16px, iOS Safari zooms the page in on focus and never zooms back. */
   input, textarea, select { font-size: 16px; }
@@ -423,27 +422,50 @@ esp-web-install-button { display: block; }
 .validation-table th, .validation-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }
 .validation-table th { color: var(--text-muted); font-weight: 500; }
 
-/* -- Emoji marker (📱, 🛰️) ---------------------------------------------- */
-.emoji-marker { font-size: 26px; line-height: 1; text-align: center; cursor: pointer; }
-
-/* Custom inactive marker */
-.maplibregl-marker-default.inactive { opacity: 0.5; }
-
-/* -- Overlay (challenge status circle) ---------------------------------- */
-.overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  z-index: 1001;
+/* -- Scan result (rail panel) -------------------------------------------- */
+/* Only as tall as its content, so the device it is about stays visible on
+   the map; it scrolls inside if a small screen cannot hold it. */
+#side-rail.expanded.compact { bottom: auto; max-height: calc(100% - 24px); }
+/* Logged out, the rail has no width of its own and would grow to the
+   longest line of the result. */
+#side-rail.compact:not(.authed) { width: 420px; }
+.result-head { display: flex; align-items: center; gap: 14px; }
+.result-badge {
+  flex: none; width: 52px; height: 52px; border-radius: 50%;
+  display: grid; place-items: center; background: #646464;
 }
-.overlay-circle {
-  width: 280px; height: 280px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+.result-badge.ok { background: var(--success); }
+.result-badge.failed { background: var(--danger); }
+.result-badge svg {
+  width: 26px; height: 26px; fill: none; stroke: #fff; stroke-width: 3;
+  stroke-linecap: round; stroke-linejoin: round;
 }
-.overlay-circle svg { width: 100%; height: 100%; }
-.overlay-circle text { font-size: 4rem; font-weight: bold; fill: white; }
-.overlay-status {
-  margin-top: 20px; font-size: 1.4rem; color: white; text-align: center;
-  font-family: var(--font); padding: 0 16px;
+.result-spinner {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25); border-top-color: #fff;
+  animation: resultSpin 0.9s linear infinite;
+}
+@keyframes resultSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .result-spinner { animation: none; } }
+.result-title { font-size: 19px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.result-when { font-size: 13px; color: var(--text-muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.result-when:empty { display: none; }
+.result-checks {
+  list-style: none; margin: 16px 0 14px; padding: 12px 0; display: grid; gap: 9px;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.result-checks li { display: grid; grid-template-columns: 22px 1fr auto; align-items: baseline; font-size: 14px; }
+.result-checks .mark { color: var(--accent); font-weight: 700; }
+.result-checks .detail { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.result-checks li.off, .result-checks li.off .mark { color: var(--text-muted); font-weight: 400; }
+.result-checks li.bad, .result-checks li.bad .mark, .result-checks li.bad .detail { color: #f4b3a5; }
+.result-note { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text-muted); }
+.result-head + .result-note { margin-top: 14px; }
+
+/* Where the scanner's browser says it is, next to the device's pin. */
+.you-dot {
+  width: 14px; height: 14px; border-radius: 50%; background: #fff;
+  border: 3px solid var(--accent); box-shadow: 0 0 0 4px rgba(79, 176, 180, 0.25);
 }
 
 a { text-decoration: none; color: var(--accent); transition: color 0.2s ease; }

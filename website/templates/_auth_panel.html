@@ -70,6 +70,7 @@
   // Phone burger: the menu is a plain class toggle; picking an entry closes it.
   function toggleNavMenu(force) {
     const info = document.getElementById('user-info');
+    if (!info) return;  // logged out: no menu
     const open = info.classList.toggle('menu-open', force);
     document.getElementById('nav-toggle').setAttribute('aria-expanded', open);
   }
@@ -80,7 +81,7 @@
   // page, so nothing else would).
   document.addEventListener('pointerdown', (e) => {
     const info = document.getElementById('user-info');
-    if (info.classList.contains('menu-open') && !info.contains(e.target)) toggleNavMenu(false);
+    if (info && info.classList.contains('menu-open') && !info.contains(e.target)) toggleNavMenu(false);
   });
   async function logout() {
     const r = await fetch('/logout');

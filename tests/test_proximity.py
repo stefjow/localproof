@@ -78,6 +78,7 @@ def test_owner_gets_proximity(client):
     result = scan(client, token_id, 2140)
     assert result['success'] is True
     assert result['proximity_verified'] is True
+    assert result['token_rtt_us'] == 2140  # shown on the owner's result card
     row = last_log()
     assert row['reason'] == 'Valid Signature + Proximity (2140 us)'
     assert row['token_id'] == token_id and row['token_rtt_us'] == 2140
@@ -101,7 +102,9 @@ def test_someone_elses_token_not_credited(client):
     result = scan(client, token_id, 2140)
     assert result['success'] is True
     assert result['proximity_verified'] is False
-    # Bob's log must not reveal that Alice's token was at the station.
+    # Neither the answer nor Bob's log may reveal that Alice's token was
+    # at the station.
+    assert result['token_rtt_us'] is None
     row = last_log()
     assert row['token_id'] is None and row['token_rtt_us'] is None
 

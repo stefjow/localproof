@@ -337,7 +337,7 @@ def validate_signed(device_id, payload_b64, sig_b64):
         conn.close()
         log_validation(device_id, "failed", "Invalid Device ID" if not device else "Device Has No Public Key")
         return render_template('map.html', devices=devices, username=username,
-                               status="Invalid Device ID", success="false")
+                               status="Invalid Device ID")
 
     nonce = secrets.token_urlsafe(16)
     conn.execute(
@@ -349,7 +349,8 @@ def validate_signed(device_id, payload_b64, sig_b64):
     conn.close()
 
     return render_template('map.html', devices=devices, username=username, nonce=nonce,
-                           nonce_ttl=NONCE_TTL_SECONDS)
+                           nonce_ttl=NONCE_TTL_SECONDS,
+                           scan_device={'device_id': device_id, 'name': device['name']})
 
 def check_signed_code(device_id, pubkey_pem, payload_b64, sig_b64):
     """Parse and verify a station's signed code: the payload and signature
@@ -396,32 +397,40 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
     """Step 2 of the challenge flow: verify signature, freshness and location."""
     device_id = pending['device_id']
 
+    def answer(success, status, **extra):
+        """What the page's result card is drawn from: the status, which
+        device it was, and the measurements behind each check."""
+        return jsonify({'success': success, 'status': status, 'device_id': device_id,
+                        'device_name': device['name'], **extra})
+
     payload_b64, sig_b64 = pending['data_enc'].split('.', 1)
     code, error = check_signed_code(device_id, device['pubkey'], payload_b64, sig_b64)
     if code is None:
         log_validation(device_id, "failed", error, scanner_lat=scanner_lat, scanner_lng=scanner_lng)
-        return jsonify({'success': False, 'status': error})
+        return answer(False, error)
     code_ts, esp_lat, esp_lng = code['ts'], code['lat'], code['lng']
     token_id, token_rtt_us = code['token_id'], code['token_rtt_us']
     if error:
         log_validation(device_id, "failed", error, esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
-        return jsonify({'success': False, 'status': error})
+        return answer(False, error)
 
     # Freshness: the signed timestamp replaces TOTP
     age = datetime.datetime.now().timestamp() - code_ts
     if age > CODE_FRESHNESS_SECONDS or age < -10:
         log_validation(device_id, "failed", "Code Expired", esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
-        return jsonify({'success': False, 'status': 'Code Expired'})
+        return answer(False, 'Code Expired')
 
     # Scanner location cross-check, same policy as v1
     location_verified = False
+    distance_m = None
     if scanner_lat is not None and scanner_lng is not None \
             and device['lat'] is not None and device['lng'] is not None:
         distance_m = haversine_m(float(scanner_lat), float(scanner_lng), device['lat'], device['lng'])
         if distance_m > MAX_SCANNER_DISTANCE_M:
             log_validation(device_id, "failed", f"Location Mismatch ({int(distance_m)}m away)",
                            esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
-            return jsonify({'success': False, 'status': 'Location Mismatch'})
+            return answer(False, 'Location Mismatch', distance_m=int(distance_m),
+                          device_lat=device['lat'], device_lng=device['lng'])
         location_verified = True
 
     # Proximity counts only for the token's owner, and only under the
@@ -437,17 +446,17 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
 
     # max_validations counts per signed code (code_ts), not per wall-clock
     # cycle, so a boundary can never double the budget.
-    success = jsonify({
-        'success': True,
-        'status': 'Valid Link' if location_verified else 'Valid Link (location unverified)',
-        'device_id': device_id,
-        'esp_lat': esp_lat,
-        'esp_lng': esp_lng,
-        'device_lat': device['lat'],
-        'device_lng': device['lng'],
-        'location_verified': location_verified,
-        'proximity_verified': proximity_verified
-    })
+    success = answer(
+        True, 'Valid Link' if location_verified else 'Valid Link (location unverified)',
+        esp_lat=esp_lat,
+        esp_lng=esp_lng,
+        device_lat=device['lat'],
+        device_lng=device['lng'],
+        location_verified=location_verified,
+        distance_m=int(distance_m) if location_verified else None,
+        proximity_verified=proximity_verified,
+        # Like the log entry below: the token's time only goes to its owner.
+        token_rtt_us=token_rtt_us if proximity_verified else None)
     conn = get_db_connection()
     if proximity_verified and already_credited(conn, device_id, code_ts, token_id, current_user.username):
         conn.close()  # the token uploaded this code first; one validation per code and owner
@@ -461,7 +470,7 @@ def complete_validation_v2(pending, device, scanner_lat, scanner_lng):
     if validations_for_code >= device['max_validations']:
         conn.close()
         log_validation(device_id, "failed", "Max Validations Exceeded", esp_lat, esp_lng, scanner_lat, scanner_lng, code_ts)
-        return jsonify({'success': False, 'status': 'Max Validations Exceeded'})
+        return answer(False, 'Max Validations Exceeded')
 
     reason = "Valid Signature" if location_verified else "Valid Signature (location unverified)"
     # The token is only recorded for its owner; logging it on someone else's
@@ -514,7 +523,8 @@ def complete_validation():
     issued_at = datetime.datetime.strptime(pending['created_at'], '%Y-%m-%d %H:%M:%S')
     if (datetime.datetime.utcnow() - issued_at).total_seconds() > NONCE_TTL_SECONDS:
         log_validation(device_id, "failed", "Challenge Expired", scanner_lat=scanner_lat, scanner_lng=scanner_lng)
-        return jsonify({'success': False, 'status': 'Challenge Expired'})
+        return jsonify({'success': False, 'status': 'Challenge Expired', 'device_id': device_id,
+                        'device_name': device['name'] if device else None})
 
     if not device:
         log_validation(device_id, "failed", "Invalid Device ID")

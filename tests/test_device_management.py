@@ -259,3 +259,54 @@ def test_map_page_survives_a_text_coordinate_row(client):
     page = client.get('/').get_data(as_text=True)
     assert 'pwned' not in page
 
+
+# -- what the scan result card is drawn from ---------------------------------
+
+def scan(client, device_id, key, **scanner):
+    p64, s64 = sign_payload(key, device_id, int(time.time()), DEV_LAT, DEV_LNG)
+    page = client.get(f'/v2/{device_id}/{p64}/{s64}').get_data(as_text=True)
+    nonce = re.search(r"nonce: '([^']+)'", page).group(1)
+    return client.post('/validate/complete', json={'nonce': nonce, **scanner}).get_json()
+
+
+def test_scan_result_names_the_device_and_gives_the_distance(client):
+    register_and_login(client, 'alice')
+    device_id, key = add_device_with_key(client, name='Front door')
+    # about 111 m north of the device
+    result = scan(client, device_id, key, scanner_lat=DEV_LAT + 0.001, scanner_lng=DEV_LNG)
+    assert result['success'] is True
+    assert result['device_id'] == device_id
+    assert result['device_name'] == 'Front door'
+    assert 105 <= result['distance_m'] <= 115
+    assert result['token_rtt_us'] is None
+
+
+def test_scan_without_location_has_no_distance(client):
+    register_and_login(client, 'alice')
+    device_id, key = add_device_with_key(client)
+    result = scan(client, device_id, key)
+    assert result['success'] is True
+    assert result['location_verified'] is False
+    assert result['distance_m'] is None
+
+
+def test_location_mismatch_says_how_far_and_where_the_device_is(client):
+    register_and_login(client, 'alice')
+    device_id, key = add_device_with_key(client, name='Front door')
+    # about 2.2 km north of the device
+    result = scan(client, device_id, key, scanner_lat=DEV_LAT + 0.02, scanner_lng=DEV_LNG)
+    assert result['success'] is False
+    assert result['status'] == 'Location Mismatch'
+    assert result['device_name'] == 'Front door'
+    assert 2100 <= result['distance_m'] <= 2300
+    assert (result['device_lat'], result['device_lng']) == (DEV_LAT, DEV_LNG)
+
+
+def test_scan_page_names_the_scanned_device(client):
+    register_and_login(client, 'alice')
+    device_id, key = add_device_with_key(client, name='Front <b>door</b>')
+    p64, s64 = sign_payload(key, device_id, int(time.time()), DEV_LAT, DEV_LNG)
+    page = client.get(f'/v2/{device_id}/{p64}/{s64}').get_data(as_text=True)
+    assert f'"device_id": "{device_id}"' in page
+    assert '<b>door</b>' not in page  # JSON-encoded for the script, not raw
+
