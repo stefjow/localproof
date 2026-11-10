@@ -202,3 +202,60 @@ def test_add_device_accepts_optional_metadata(client):
     devices = client.get('/api/my-devices').get_json()
     assert devices[0]['name'] == 'Front door'
     assert devices[0]['description'] == 'Reception'
+
+
+# -- coordinates -------------------------------------------------------------
+# The map page writes device coordinates into its script, so the server only
+# stores real numbers in range.
+
+@pytest.mark.parametrize('lat,lng', [
+    ('0,alert(1)', DEV_LNG),      # a string would be stored as text
+    (DEV_LAT, '<script>'),
+    (91, DEV_LNG),                # MapLibre throws on these
+    (DEV_LAT, -343.6237),
+    (float('nan'), DEV_LNG),
+    (DEV_LAT, float('inf')),
+])
+def test_add_device_rejects_bad_coordinates(client, lat, lng):
+    register_and_login(client, 'alice')
+    pem = ECC.generate(curve='P-256').public_key().export_key(format='PEM')
+    resp = client.post('/add-device', json={
+        'pubkey': pem, 'lat': lat, 'lng': lng, 'max_validations': 1}).get_json()
+    assert resp['success'] is False
+    assert client.get('/api/my-devices').get_json() == []
+
+
+def test_add_device_without_position_still_allowed(client):
+    register_and_login(client, 'alice')
+    device_id, _ = add_device_with_key(client, lat=None, lng=None)
+    d = client.get('/api/my-devices').get_json()[0]
+    assert d['device_id'] == device_id
+    assert d['lat'] is None and d['lng'] is None
+
+
+@pytest.mark.parametrize('field,value', [
+    ('lat', 91), ('lat', 'north'), ('lat', float('nan')),
+    ('lng', 181), ('lng', -343.6237), ('lng', float('inf')),
+])
+def test_update_device_rejects_bad_coordinates(client, field, value):
+    register_and_login(client, 'alice')
+    device_id, _ = add_device_with_key(client)
+    resp = client.put(f'/update-device/{device_id}', json={field: value}).get_json()
+    assert resp['success'] is False
+    d = client.get('/api/my-devices').get_json()[0]
+    assert (d['lat'], d['lng']) == (DEV_LAT, DEV_LNG)
+
+
+def test_map_page_survives_a_text_coordinate_row(client):
+    """A row written before the check existed must not reach the script."""
+    register_and_login(client, 'alice')
+    device_id, _ = add_device_with_key(client)
+    import sqlite3
+    conn = sqlite3.connect('database.db')
+    conn.execute("UPDATE devices SET active = 1, lat = '0,window.pwned=1' WHERE device_id = ?",
+                 (device_id,))
+    conn.commit()
+    conn.close()
+    page = client.get('/').get_data(as_text=True)
+    assert 'pwned' not in page
+

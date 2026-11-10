@@ -33,13 +33,18 @@ async function loadValidations() {
     const tr = document.createElement('tr');
     tr.className = 'val-row ' + (row.status === 'success' ? 'ok' : 'bad');
     tr.innerHTML = `
-      <td data-label="Time">${row.timestamp}</td>
-      <td data-label="Device"><a href="#" onclick="openDeviceHistory('${row.device_id}'); return false;">${row.device_id}</a></td>
-      <td data-label="Status"><span class="status-badge ${row.status}">${row.status}</span></td>
-      <td data-label="Reason">${row.reason || ''}</td>
+      <td data-label="Time">${escapeHtml(row.timestamp)}</td>
+      <td data-label="Device"><a href="#" class="val-device">${escapeHtml(row.device_id)}</a></td>
+      <td data-label="Status"><span class="status-badge ${escapeHtml(row.status)}">${escapeHtml(row.status)}</span></td>
+      <td data-label="Reason">${escapeHtml(row.reason)}</td>
       <td data-label="Scanner location">${(row.scanner_lat !== null && row.scanner_lng !== null)
           ? `${row.scanner_lat.toFixed(4)}, ${row.scanner_lng.toFixed(4)}` : '—'}</td>
     `;
+    // The id comes from the scanned URL, so it is never put into an onclick.
+    tr.querySelector('.val-device').addEventListener('click', (e) => {
+      e.preventDefault();
+      openDeviceHistory(row.device_id);
+    });
     tbody.appendChild(tr);
   }
 }

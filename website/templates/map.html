@@ -134,8 +134,8 @@
         // altitude) or a globe-to-street flyTo — neither is worth watching on
         // every page load.
         const ACTIVE_DEVICES = [
-            {% for device in devices %}{% if device.active and device.lat is not none and device.lng is not none %}
-            [{{ device.lng }}, {{ device.lat }}],
+            {% for device in devices %}{% if device.active and device.lat is number and device.lng is number %}
+            [{{ device.lng|tojson }}, {{ device.lat|tojson }}],
             {% endif %}{% endfor %}
         ];
 
@@ -157,11 +157,27 @@
         // Devices drawer can move or remove them in place after an edit.
         const myActiveMarkers = {};
         const bounds = new maplibregl.LngLatBounds();
-        // Set when a deep link already targets a specific device, so the
-        // arrival fit does not fight the flyTo that opened it.
+        // Set when a deep link or a scan result already targets a specific
+        // device, so the arrival fit does not fight the view that showed it.
         let skipInitialFit = false;
 
         function roundToFourDecimals(num) { return Math.round(num * 10000) / 10000; }
+
+        // fitBounds with a zoom cap that holds. On the zoomed-out globe, which
+        // is where the map starts, MapLibre 5.3.1 ignores maxZoom: devices
+        // close together, or a scan result, would land at zoom 19 to 22.
+        function fitTo(b, padding, maxZoom) {
+            const cam = map.cameraForBounds(b, { padding });
+            if (cam) map.jumpTo({ center: cam.center, zoom: Math.min(cam.zoom, maxZoom) });
+        }
+
+        // Device names, usernames and the ids in a scanned URL are all
+        // someone's input. Anything from the server goes through this before
+        // it is put into an HTML string.
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, c => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
 
         function makeEmojiMarker(emoji) {
             const el = document.createElement('div');
@@ -182,7 +198,7 @@
             const success = logs.filter(l => l.status === 'success');
             if (!success.length) return '<p>No successful validation attempts.</p>';
             let out = '<table class="validation-table"><thead><tr><th>Timestamp</th><th>User</th></tr></thead><tbody>';
-            for (const l of success) out += `<tr><td>${l.timestamp}</td><td>${l.username}</td></tr>`;
+            for (const l of success) out += `<tr><td>${escapeHtml(l.timestamp)}</td><td>${escapeHtml(l.username)}</td></tr>`;
             return out + '</tbody></table>';
         }
 
@@ -194,11 +210,13 @@
             const marker = new maplibregl.Marker({ color: '#888', draggable: true })
                 .setLngLat([lng, lat])
                 .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(
-                    `<div class="popup-content">Device ID: ${deviceId}<br><hr><strong>Drag to correct location, then scan its QR to validate.</strong></div>`))
+                    `<div class="popup-content">Device ID: ${escapeHtml(deviceId)}<br><hr><strong>Drag to correct location, then scan its QR to validate.</strong></div>`))
                 .addTo(map);
             marker.getElement().style.opacity = '0.7';
             marker.on('dragend', async () => {
-                const { lng: nlng, lat: nlat } = marker.getLngLat();
+                // wrap(): on the globe a marker can sit a whole turn away
+                // from its real longitude (16.37 reported as -343.63).
+                const { lng: nlng, lat: nlat } = marker.getLngLat().wrap();
                 try {
                     const r = await fetch(`/update-device/${encodeURIComponent(deviceId)}`, {
                         method: 'PUT',
@@ -261,25 +279,38 @@
                 // Read through _device and the live marker position so an edit
                 // is reflected without rebuilding the marker.
                 const dev = marker._device;
-                const pos = marker.getLngLat();
+                const pos = marker.getLngLat().wrap();
                 const logs = await fetchValidationLogs(dev.device_id);
                 const ownerLink = (CURRENT_USER === dev.username)
-                    ? `<a href="#" onclick="openDrawer('devices-drawer'); return false;">Edit / Manage →</a>` : '';
-                popup.setHTML(`
-                    <div class="popup-headline">${dev.name || dev.device_id}</div>
+                    ? `<a href="#" class="popup-manage">Edit / Manage →</a>` : '';
+                // Built as a node so the links get real listeners: an id
+                // inside an onclick="" string cannot be escaped safely.
+                const body = document.createElement('div');
+                body.innerHTML = `
+                    <div class="popup-headline">${escapeHtml(dev.name || dev.device_id)}</div>
                     <div class="popup-content">
-                        Device: ${dev.device_id}<br>
+                        Device: ${escapeHtml(dev.device_id)}<br>
                         Location: ${roundToFourDecimals(pos.lat)}, ${roundToFourDecimals(pos.lng)}<br>
-                        Max validations / cycle: ${dev.max_validations}
+                        Max validations / cycle: ${escapeHtml(dev.max_validations)}
                         <hr>
                         <strong>Successful validations:</strong>
                         <div class="popup-scroll">${renderValidationLogs(logs)}</div>
                         <div class="popup-links">
-                            <a href="#" onclick="openDeviceHistory('${dev.device_id}'); return false;">Full history →</a>
+                            <a href="#" class="popup-history">Full history →</a>
                             ${ownerLink}
                         </div>
                     </div>
-                `);
+                `;
+                body.querySelector('.popup-history').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    openDeviceHistory(dev.device_id);
+                });
+                const manage = body.querySelector('.popup-manage');
+                if (manage) manage.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    openDrawer('devices-drawer');
+                });
+                popup.setDOMContent(body);
             });
             markers.push(marker);
             return marker;
@@ -288,7 +319,7 @@
         // Devices from the server. Normally all active, but the QR-scan
         // render also includes the scanned device so it can be shown even
         // before its first validation — only active ones frame the map.
-        {% for device in devices %}{% if device.lat is not none and device.lng is not none %}
+        {% for device in devices %}{% if device.lat is number and device.lng is number %}
         createActiveMarker({{ {
             'device_id': device.device_id,
             'lat': device.lat,
@@ -297,7 +328,7 @@
             'username': device.username,
             'max_validations': device.max_validations,
         }|tojson }});
-        {% if device.active %}bounds.extend([{{ device.lng }}, {{ device.lat }}]);{% endif %}
+        {% if device.active %}bounds.extend([{{ device.lng|tojson }}, {{ device.lat|tojson }}]);{% endif %}
         {% endif %}
         {% endfor %}
 
@@ -326,36 +357,76 @@
         // the map should simply already be there when you arrive.
         map.on('load', () => {
             if (skipInitialFit || ACTIVE_DEVICES.length < 2) return;
-            map.fitBounds(bounds, { padding: 80, maxZoom: 13, duration: 0 });
+            fitTo(bounds, 80, 13);
         });
         {% endif %}
+
+        // The overlay goes away 10 seconds after it shows a result, or on a
+        // click or key press. While a scan is still being verified it stays
+        // up and cannot be dismissed: answering the location prompt can take
+        // longer than 10 seconds, and the result must not land on an overlay
+        // that is already hidden.
+        let overlayHasResult = false;
+        function armOverlayDismiss() {
+            const overlay = document.getElementById('status-overlay');
+            if (!overlay) return;
+            overlayHasResult = true;
+            setTimeout(() => { overlay.style.display = 'none'; }, 10000);
+        }
+        (function () {
+            const overlay = document.getElementById('status-overlay');
+            if (!overlay) return;
+            const hide = () => { if (overlayHasResult) overlay.style.display = 'none'; };
+            overlay.addEventListener('click', hide);
+            document.addEventListener('keydown', hide);
+            {% if not nonce %}armOverlayDismiss();  // rendered with its result{% endif %}
+        })();
 
         // Challenge flow: answer the server's nonce with our geolocation, then render the result.
         {% if nonce %}
         (function () {
             let scannerPos = null;
+            // The server stops accepting the nonce after this long.
+            const NONCE_TTL_MS = {{ nonce_ttl|tojson }} * 1000;
+            let sent = false;
 
             function completeValidation() {
+                if (sent) return;
+                sent = true;
                 const body = { nonce: '{{ nonce }}' };
                 if (scannerPos) {
                     body.scanner_lat = scannerPos.coords.latitude;
                     body.scanner_lng = scannerPos.coords.longitude;
                 }
+                // A request that never comes back must still end in a result.
+                const abort = new AbortController();
+                setTimeout(() => abort.abort(), 20000);
                 fetch('/validate/complete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
+                    signal: abort.signal,
                 })
                 .then(r => r.json())
                 .then(showResult)
                 .catch(() => showResult({ success: false, status: 'Validation Error' }));
             }
 
+            // If the location prompt is never answered, neither callback
+            // below fires. Once the nonce has run out there is nothing left
+            // to wait for, so say what the server would say.
+            setTimeout(() => {
+                if (sent) return;
+                sent = true;
+                showResult({ success: false, status: 'Challenge Expired' });
+            }, NONCE_TTL_MS);
+
             function showResult(data) {
                 document.getElementById('overlay-circle').style.background =
                     data.success ? 'rgba(0, 97, 100, 1)' : 'rgba(219, 67, 37, 1)';
                 document.getElementById('overlay-mark').textContent = data.success ? '✓' : '✗';
                 document.getElementById('overlay-status-text').textContent = data.status;
+                armOverlayDismiss();
 
                 if (data.esp_lat && data.esp_lng) {
                     const espMarker = makeEmojiMarker('🛰️')
@@ -384,7 +455,11 @@
                         b.extend([scannerPos.coords.longitude, scannerPos.coords.latitude]);
                     }
                     if (data.device_lat && data.device_lng) b.extend([data.device_lng, data.device_lat]);
-                    map.fitBounds(b, { padding: 60, maxZoom: 15, duration: 0 });
+                    // The result can arrive before the map has loaded; without
+                    // this the arrival fit would then zoom back out to all
+                    // devices.
+                    skipInitialFit = true;
+                    fitTo(b, 60, 15);
                 }
             }
 
@@ -399,16 +474,6 @@
             }
         })();
         {% endif %}
-
-        // Hide the overlay after 10 seconds or on user interaction.
-        (function () {
-            const overlay = document.getElementById('status-overlay');
-            if (!overlay) return;
-            const hide = () => { overlay.style.display = 'none'; };
-            setTimeout(hide, 10000);
-            overlay.addEventListener('click', hide);
-            document.addEventListener('keydown', hide);
-        })();
 
         // -- Rail panels -------------------------------------------------------
         // The map is the app shell; every panel opens inside the right-hand
@@ -509,7 +574,7 @@
                 .setLngLat([lng, lat])
                 .addTo(map);
             pendingPin.on('dragend', () => {
-                const p = pendingPin.getLngLat();
+                const p = pendingPin.getLngLat().wrap();
                 const form = document.getElementById('add-device-drawer');
                 form.dataset.lat = p.lat;
                 form.dataset.lng = p.lng;

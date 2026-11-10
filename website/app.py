@@ -111,6 +111,22 @@ def format_delay(seconds):
         return f"{minutes // 60} h"
     return f"{minutes // (24 * 60)} d"
 
+def parse_coordinate(value, limit):
+    """A latitude (limit 90) or longitude (limit 180) from request JSON.
+    Returns (ok, number). None is allowed and means no position; anything
+    else must be a finite number in range. The map page writes coordinates
+    into its script and hands them to MapLibre, which throws on a value out
+    of range, so one bad row would break the map for every visitor."""
+    if value is None:
+        return True, None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False, None
+    if not -limit <= number <= limit:  # also false for NaN and infinities
+        return False, None
+    return True, number
+
 def haversine_m(lat1, lng1, lat2, lng2):
     """Distance between two coordinates in meters."""
     lat1, lng1, lat2, lng2 = map(radians, (lat1, lng1, lat2, lng2))
@@ -332,7 +348,8 @@ def validate_signed(device_id, payload_b64, sig_b64):
     conn.commit()
     conn.close()
 
-    return render_template('map.html', devices=devices, username=username, nonce=nonce)
+    return render_template('map.html', devices=devices, username=username, nonce=nonce,
+                           nonce_ttl=NONCE_TTL_SECONDS)
 
 def check_signed_code(device_id, pubkey_pem, payload_b64, sig_b64):
     """Parse and verify a station's signed code: the payload and signature
@@ -578,8 +595,10 @@ def add_device_route():
 
     data = request.get_json()
     pubkey = data.get('pubkey')
-    lat = data.get('lat')
-    lng = data.get('lng')
+    lat_ok, lat = parse_coordinate(data.get('lat'), 90)
+    lng_ok, lng = parse_coordinate(data.get('lng'), 180)
+    if not (lat_ok and lng_ok):
+        return jsonify({'success': False, 'message': 'Invalid position.'})
     max_validations = data.get('max_validations')
     name = (data.get('name') or '').strip()[:80]
     description = (data.get('description') or '').strip()[:200]
@@ -656,20 +675,14 @@ def update_device(device_id):
     if 'description' in data:
         fields.append('description = ?')
         values.append((data.get('description') or '').strip()[:200])
-    if 'lat' in data:
-        try:
-            fields.append('lat = ?')
-            values.append(float(data['lat']) if data['lat'] is not None else None)
-        except (TypeError, ValueError):
-            conn.close()
-            return jsonify({'success': False, 'message': 'Invalid lat.'})
-    if 'lng' in data:
-        try:
-            fields.append('lng = ?')
-            values.append(float(data['lng']) if data['lng'] is not None else None)
-        except (TypeError, ValueError):
-            conn.close()
-            return jsonify({'success': False, 'message': 'Invalid lng.'})
+    for field, limit in (('lat', 90), ('lng', 180)):
+        if field in data:
+            ok, number = parse_coordinate(data[field], limit)
+            if not ok:
+                conn.close()
+                return jsonify({'success': False, 'message': f'Invalid {field}.'})
+            fields.append(f'{field} = ?')
+            values.append(number)
     if 'max_validations' in data:
         try:
             mv = int(data['max_validations'])
